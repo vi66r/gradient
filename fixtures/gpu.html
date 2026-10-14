@@ -1,0 +1,37 @@
+<!doctype html><meta charset="utf-8"><title>Browser GPU test</title>
+<style>body{margin:0;background:#111827;color:#e5e7eb;font:15px system-ui}main{max-width:760px;margin:40px auto}h1{font-weight:500}canvas{width:100%;height:420px;display:block;border-radius:12px}pre{white-space:pre-wrap;line-height:1.7}a{color:#a5b4fc}</style>
+<main><h1>3D, inside the real browser engine.</h1><canvas id="scene"></canvas><pre id="result">Requesting WebGPU adapter…</pre><a href="/">Back to interaction test</a></main>
+<script type="module">
+const result=document.querySelector('#result');
+window.probe={secureContext:isSecureContext,webgl2:!!document.createElement('canvas').getContext('webgl2'),webgpu:!!navigator.gpu,frames:0};
+try {
+ if(!navigator.gpu)throw Error('WebGPU is unavailable');
+ const adapter=await navigator.gpu.requestAdapter();if(!adapter)throw Error('No WebGPU adapter');
+ const device=await adapter.requestDevice();const canvas=document.querySelector('canvas');
+ canvas.width=Math.floor(canvas.clientWidth*devicePixelRatio);canvas.height=Math.floor(canvas.clientHeight*devicePixelRatio);
+ const context=canvas.getContext('webgpu');const format=navigator.gpu.getPreferredCanvasFormat();context.configure({device,format,alphaMode:'opaque'});
+ const shader=device.createShaderModule({code:`
+ struct VertexOut { @builtin(position) position:vec4f, @location(0) color:vec3f };
+ @group(0) @binding(0) var<uniform> params:vec4f;
+ @vertex fn vs(@builtin(vertex_index) index:u32)->VertexOut {
+   let vertices=array<vec3f,8>(vec3f(-1,-1,-1),vec3f(1,-1,-1),vec3f(1,1,-1),vec3f(-1,1,-1),vec3f(-1,-1,1),vec3f(1,-1,1),vec3f(1,1,1),vec3f(-1,1,1));
+   let indices=array<u32,36>(0,2,1,0,3,2,4,5,6,4,6,7,0,1,5,0,5,4,3,7,6,3,6,2,0,4,7,0,7,3,1,2,6,1,6,5);
+   let p=vertices[indices[index]]*0.7;let c=cos(params.x);let s=sin(params.x);
+   let r=vec3f(p.x*c+p.z*s,p.y,-p.x*s+p.z*c);
+   let q=vec3f(r.x,r.y*cos(0.5)-r.z*sin(0.5),r.y*sin(0.5)+r.z*cos(0.5)+3.5);
+   var out:VertexOut;out.position=vec4f(q.x/params.y,q.y,q.z-0.1,q.z);out.color=vertices[indices[index]]*0.35+0.6;return out;
+ }
+ @fragment fn fs(in:VertexOut)->@location(0) vec4f{return vec4f(in.color,1);}`});
+ const pipeline=device.createRenderPipeline({layout:'auto',vertex:{module:shader,entryPoint:'vs'},fragment:{module:shader,entryPoint:'fs',targets:[{format}]},primitive:{topology:'triangle-list'},depthStencil:{format:'depth24plus',depthWriteEnabled:true,depthCompare:'less'}});
+ const uniforms=device.createBuffer({size:16,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+ const group=device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:uniforms}}]});
+ const depth=device.createTexture({size:[canvas.width,canvas.height],format:'depth24plus',usage:GPUTextureUsage.RENDER_ATTACHMENT});
+ let start=performance.now();
+ function frame(time){device.queue.writeBuffer(uniforms,0,new Float32Array([time/1800,canvas.width/canvas.height,0,0]));
+ const encoder=device.createCommandEncoder();const pass=encoder.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:{r:.035,g:.055,b:.10,a:1},loadOp:'clear',storeOp:'store'}],depthStencilAttachment:{view:depth.createView(),depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'store'}});
+ pass.setPipeline(pipeline);pass.setBindGroup(0,group);pass.draw(36);pass.end();device.queue.submit([encoder.finish()]);window.probe.frames++;
+ if(window.probe.frames%60===0){window.probe.fps=Math.round(window.probe.frames*1000/(performance.now()-start));result.textContent=JSON.stringify(window.probe,null,2)}requestAnimationFrame(frame)}
+ device.addEventListener('uncapturederror',e=>{window.probe.error=String(e.error);result.textContent=JSON.stringify(window.probe,null,2)});
+ requestAnimationFrame(frame);
+}catch(error){window.probe.error=String(error);result.textContent=JSON.stringify(window.probe,null,2)}
+</script>

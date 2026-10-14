@@ -1,0 +1,38 @@
+[package]
+name = "browser"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+description = "A quiet native browser for macOS and Linux"
+publish = false
+
+[dependencies]
+gpui-kit = "=0.7.3"
+wry = { version = "=0.57.0", features = ["devtools"] }
+anyhow = "1"
+async-channel = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+tempfile = "3"
+fs2 = "0.4"
+ureq = "3"
+log = "0.4"
+env_logger = "0.11"
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
