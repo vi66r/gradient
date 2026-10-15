@@ -217,9 +217,21 @@ impl Browser {
                 ),
             )
             .child(
-                control("copy-url", "Copy address", IconName::Copy)
-                    .w(px(32.))
-                    .on_click(cx.listener(|this, _, _, cx| this.copy_url(cx))),
+                control(
+                    "copy-url",
+                    if self.copy_feedback == Some(CopyTarget::Address) {
+                        "Address copied"
+                    } else {
+                        "Copy address"
+                    },
+                    if self.copy_feedback == Some(CopyTarget::Address) {
+                        IconName::Check
+                    } else {
+                        IconName::Copy
+                    },
+                )
+                .w(px(32.))
+                .on_click(cx.listener(|this, _, _, cx| this.copy_url(cx))),
             )
             .child(
                 control("inspector", "Inspect page", IconName::Code)
@@ -324,7 +336,7 @@ impl Browser {
             })))
             .child(div().flex().items_center().gap_2().child(div().flex_1().child(Input::new(&self.request_url).aria_label("Request URL")))
                 .child(control("send-request",if self.requesting {"Sending…"} else {"Send request"},IconName::ArrowUpRight).bg(rgb(ACCENT)).text_color(rgb(0xffffff)).on_click(cx.listener(|this,_,w,cx|this.send_request(w,cx))))
-                .child(control("copy-curl","Copy cURL",IconName::Copy).on_click(cx.listener(|this,_,_,cx| {cx.write_to_clipboard(ClipboardItem::new_string(http_client::curl(&this.request(cx))));this.notice=Some("cURL copied.".into());cx.notify();}))))
+                .child(control("copy-curl",if self.copy_feedback == Some(CopyTarget::Curl) {"Copied"} else {"Copy cURL"},if self.copy_feedback == Some(CopyTarget::Curl) {IconName::Check} else {IconName::Copy}).w(px(112.)).on_click(cx.listener(|this,_,_,cx| {cx.write_to_clipboard(ClipboardItem::new_string(http_client::curl(&this.request(cx))));this.flash_copy(CopyTarget::Curl,cx);}))))
             .child(div().flex().gap_4()
                 .child(div().flex_1().min_w_0().flex().flex_col().gap_2().child(label("HEADERS")).child(Textarea::new(&self.request_headers).h(px(136.)).aria_label("Request headers")))
                 .child(div().flex_1().min_w_0().flex().flex_col().gap_2().child(label("BODY")).child(Textarea::new(&self.request_body).h(px(136.)).aria_label("Request body"))))

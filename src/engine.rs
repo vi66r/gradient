@@ -182,7 +182,7 @@ impl Page {
 
     pub fn place(self: &Rc<Self>, bounds: Bounds<Pixels>, scale: f32) {
         #[cfg(target_os = "macos")]
-        if !self.attaching.replace(true) {
+        if native_host_needs_update(self, bounds) && !self.attaching.replace(true) {
             let page = self.clone();
             // Reparenting synchronously inside GPUI layout re-enters AppKit's
             // window callbacks while GPUI is borrowed. Run between UI updates.
@@ -240,6 +240,42 @@ impl Page {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn native_frame(
+    container: &objc2_app_kit::NSView,
+    bounds: Bounds<Pixels>,
+) -> objc2_foundation::NSRect {
+    let y = if container.isFlipped() {
+        f64::from(bounds.origin.y)
+    } else {
+        container.bounds().size.height - f64::from(bounds.origin.y) - f64::from(bounds.size.height)
+    };
+    objc2_foundation::NSRect::new(
+        objc2_foundation::NSPoint::new(f64::from(bounds.origin.x), y),
+        objc2_foundation::NSSize::new(f64::from(bounds.size.width), f64::from(bounds.size.height)),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn native_host_needs_update(page: &Page, bounds: Bounds<Pixels>) -> bool {
+    use objc2::ClassType;
+    use objc2_app_kit::NSView;
+    let host = page.host.borrow();
+    let Some(host) = host.as_ref() else {
+        return true;
+    };
+    // Page placement and its retained AppKit host are confined to the UI thread.
+    let Some(container) = (unsafe { host.0.superview() }) else {
+        return true;
+    };
+    // AccessKit may lazily subclass the content view. Preserve a plain wrapper
+    // around both accessible trees even if this happens after first layout.
+    if container.class() != NSView::class() {
+        return true;
+    }
+    host.0.isHidden() || host.0.frame() != native_frame(&container, bounds)
+}
+
 /// GPUI's accessibility provider owns its view's children. Put WKWebView beside
 /// that view in an ordinary AppKit container so VoiceOver sees both native trees.
 #[cfg(target_os = "macos")]
@@ -274,6 +310,12 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
         };
         if page.host.borrow().is_none() {
             let host = NSView::initWithFrame(NSView::alloc(mtm), web.frame());
+            // AppKit resizes the host in the same native resize transaction as
+            // the window. GPUI only reconciles layout changes, not every frame.
+            host.setAutoresizingMask(
+                NSAutoresizingMaskOptions::ViewWidthSizable
+                    | NSAutoresizingMaskOptions::ViewHeightSizable,
+            );
             container.addSubview(&host);
             web.removeFromSuperview();
             host.addSubview(&web);
@@ -289,22 +331,13 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
                 host.0.removeFromSuperview();
                 container.addSubview(&host.0);
             }
-            let bounds = page.bounds.get();
-            let y = if container.isFlipped() {
-                f64::from(bounds.origin.y)
-            } else {
-                container.bounds().size.height
-                    - f64::from(bounds.origin.y)
-                    - f64::from(bounds.size.height)
-            };
-            host.0.setFrame(objc2_foundation::NSRect::new(
-                objc2_foundation::NSPoint::new(f64::from(bounds.origin.x), y),
-                objc2_foundation::NSSize::new(
-                    f64::from(bounds.size.width),
-                    f64::from(bounds.size.height),
-                ),
-            ));
-            host.0.setHidden(!page.visible.get());
+            let frame = native_frame(&container, page.bounds.get());
+            if host.0.frame() != frame {
+                host.0.setFrame(frame);
+            }
+            if host.0.isHidden() == page.visible.get() {
+                host.0.setHidden(!page.visible.get());
+            }
         }
     }
     Ok(())

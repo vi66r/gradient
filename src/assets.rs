@@ -5,6 +5,7 @@ gpui::assets::icon_assets!(
     ExtraIcons,
     [
         Terminal,
+        Check,
         Code,
         Compass,
         Box,

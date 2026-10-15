@@ -48,6 +48,12 @@ struct Tab {
     grant: Option<(String, u64)>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CopyTarget {
+    Address,
+    Curl,
+}
+
 struct Browser {
     // Native views must drop before the shared Linux WebContext.
     tabs: Vec<Tab>,
@@ -62,6 +68,8 @@ struct Browser {
     store: session::Store,
     dirty: bool,
     notice: Option<String>,
+    copy_feedback: Option<CopyTarget>,
+    copy_epoch: u64,
     lab: bool,
     request_method: String,
     request_url: Entity<InputState>,
@@ -169,6 +177,8 @@ impl Browser {
             store,
             dirty: false,
             notice,
+            copy_feedback: None,
+            copy_epoch: 0,
             lab: false,
             request_method: "GET".into(),
             request_url,
@@ -260,8 +270,10 @@ impl Browser {
     }
 
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        for tab in &self.tabs {
-            if let Some(page) = &tab.page {
+        for (tab_index, tab) in self.tabs.iter().enumerate() {
+            if tab_index != index
+                && let Some(page) = &tab.page
+            {
                 page.hide();
             }
         }
@@ -381,8 +393,27 @@ impl Browser {
             .filter(|url| model::allowed_navigation(url))
             .unwrap_or_else(|| tab.saved.url.clone());
         cx.write_to_clipboard(ClipboardItem::new_string(url));
-        self.notice = Some("Address copied.".into());
+        self.flash_copy(CopyTarget::Address, cx);
+    }
+
+    fn flash_copy(&mut self, target: CopyTarget, cx: &mut Context<Self>) {
+        self.copy_feedback = Some(target);
+        self.copy_epoch = self.copy_epoch.wrapping_add(1);
+        let epoch = self.copy_epoch;
         cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(1500))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                // Repeated copies get a full feedback interval of their own.
+                if this.copy_epoch == epoch {
+                    this.copy_feedback = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn save(&mut self) {

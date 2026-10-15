@@ -1,0 +1,1560 @@
+{
+  "date": "2026-10-15",
+  "hardware": "Apple M1 Max, 64 GiB RAM",
+  "os": "macOS 26.6.2 (25G83)",
+  "window_points": [
+    1240,
+    820
+  ],
+  "page_viewport": [
+    1016,
+    756,
+    1
+  ],
+  "baseline_commit": "89ae83fc244b09ac371f003ec79297819fcce0af",
+  "candidate_source_sha256": "274cdcf1b9bde8b0efb287fa2574d740e226905154e41e3ee2aa3cb154adfb3f",
+  "candidate_source_hash_files": [
+    "src/agent.rs",
+    "src/assets.rs",
+    "src/engine.rs",
+    "src/http_client.rs",
+    "src/main.rs",
+    "src/mcp.rs",
+    "src/model.rs",
+    "src/session.rs",
+    "src/ui.rs",
+    "Cargo.toml",
+    "Cargo.lock"
+  ],
+  "variants": {
+    "before": {
+      "raw_sha256": "24179950db44a65bd6d27860d47af81918c9c0ce71921fea0e7946a014a84794",
+      "runs": [
+        {
+          "run": "before-blank-1",
+          "workload": "blank",
+          "trial": 1,
+          "cpu_percent": 1.2162036303203023,
+          "wakeups_per_second": 144.9551854399093,
+          "footprint_mib_median": 49.407623291015625,
+          "footprint_mib_peak": 49.735748291015625,
+          "process_count": 2,
+          "frames": null,
+          "sample_seconds": 20.364914791018236,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            8.74658203125,
+            10.416015625
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10256960,
+              "rss": 39665664
+            },
+            {
+              "name": "browser",
+              "footprint": 41550688,
+              "rss": 104579072
+            }
+          ]
+        },
+        {
+          "run": "before-static-1",
+          "workload": "static",
+          "trial": 1,
+          "cpu_percent": 1.3521201358552233,
+          "wakeups_per_second": 150.22057648447625,
+          "footprint_mib_median": 88.33128356933594,
+          "footprint_mib_peak": 96.26878356933594,
+          "process_count": 5,
+          "frames": {
+            "run": "before-static-1",
+            "hidden": 0,
+            "viewport": [
+              1016,
+              756,
+              1
+            ]
+          },
+          "sample_seconds": 20.316790624987334,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            6.69140625,
+            8.43896484375
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5505504,
+              "rss": 13271040
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 17482376,
+              "rss": 34111488
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 6668816,
+              "rss": 22872064
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 14434952,
+              "rss": 31834112
+            },
+            {
+              "name": "browser",
+              "footprint": 48530416,
+              "rss": 121028608
+            }
+          ]
+        },
+        {
+          "run": "before-gpu-1",
+          "workload": "gpu",
+          "trial": 1,
+          "cpu_percent": 18.730724095217226,
+          "wakeups_per_second": 328.6864155143982,
+          "footprint_mib_median": 130.81671142578125,
+          "footprint_mib_peak": 134.48858642578125,
+          "process_count": 7,
+          "frames": {
+            "run": "before-gpu-1",
+            "path": "/gpu",
+            "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+            "viewport": [
+              1016,
+              756,
+              1
+            ],
+            "samples": 1441,
+            "fps": 72.00319792135112,
+            "p50_ms": 14,
+            "p95_ms": 15,
+            "p99_ms": 17,
+            "over25ms": 0,
+            "over50ms": 0,
+            "resizes": 0,
+            "hidden": 0,
+            "probe": {
+              "secureContext": true,
+              "webgl2": true,
+              "webgpu": true,
+              "frames": 1806,
+              "fps": 72
+            }
+          },
+          "sample_seconds": 20.29289829201298,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            8.5498046875,
+            9.53759765625
+          ],
+          "last_processes": [
+            {
+              "name": "MTLCompilerService",
+              "footprint": 10781152,
+              "rss": 14368768
+            },
+            {
+              "name": "MTLCompilerService",
+              "footprint": 15548920,
+              "rss": 30539776
+            },
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5603832,
+              "rss": 13320192
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 23757496,
+              "rss": 38158336
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 6717968,
+              "rss": 22806528
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 28607160,
+              "rss": 39976960
+            },
+            {
+              "name": "browser",
+              "footprint": 48481264,
+              "rss": 121487360
+            }
+          ]
+        },
+        {
+          "run": "before-restore20-1",
+          "workload": "restore20",
+          "trial": 1,
+          "cpu_percent": 1.2773667864790446,
+          "wakeups_per_second": 150.15390344689686,
+          "footprint_mib_median": 97.75375366210938,
+          "footprint_mib_peak": 103.73815155029297,
+          "process_count": 6,
+          "frames": {
+            "run": "before-restore20-1",
+            "hidden": 0,
+            "viewport": [
+              1016,
+              756,
+              1
+            ]
+          },
+          "sample_seconds": 20.30583241599379,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            6.20556640625,
+            7.39501953125
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5538248,
+              "rss": 13320192
+            },
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10142296,
+              "rss": 39600128
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 17547936,
+              "rss": 34078720
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 6816272,
+              "rss": 22937600
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 12370592,
+              "rss": 31539200
+            },
+            {
+              "name": "browser",
+              "footprint": 50152456,
+              "rss": 123011072
+            }
+          ]
+        },
+        {
+          "run": "before-blank-2",
+          "workload": "blank",
+          "trial": 2,
+          "cpu_percent": 1.2289721484523817,
+          "wakeups_per_second": 144.96470003465333,
+          "footprint_mib_median": 48.954498291015625,
+          "footprint_mib_peak": 49.298248291015625,
+          "process_count": 2,
+          "frames": null,
+          "sample_seconds": 20.301494083018042,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            6.53466796875,
+            7.435546875
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10191424,
+              "rss": 39518208
+            },
+            {
+              "name": "browser",
+              "footprint": 41141088,
+              "rss": 104185856
+            }
+          ]
+        },
+        {
+          "run": "before-static-2",
+          "workload": "static",
+          "trial": 2,
+          "cpu_percent": 1.3014627573611466,
+          "wakeups_per_second": 149.95084845307275,
+          "footprint_mib_median": 86.78440856933594,
+          "footprint_mib_peak": 87.44068145751953,
+          "process_count": 5,
+          "frames": {
+            "run": "before-static-2",
+            "hidden": 0,
+            "viewport": [
+              1016,
+              756,
+              1
+            ]
+          },
+          "sample_seconds": 20.313322874950245,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            6.056640625,
+            7.162109375
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5521864,
+              "rss": 13303808
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 17646240,
+              "rss": 34078720
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 7078440,
+              "rss": 23183360
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 12272240,
+              "rss": 31653888
+            },
+            {
+              "name": "browser",
+              "footprint": 48514056,
+              "rss": 120782848
+            }
+          ]
+        },
+        {
+          "run": "before-gpu-2",
+          "workload": "gpu",
+          "trial": 2,
+          "cpu_percent": 19.41907316139189,
+          "wakeups_per_second": 330.15518896514646,
+          "footprint_mib_median": 105.1283187866211,
+          "footprint_mib_peak": 107.5970687866211,
+          "process_count": 5,
+          "frames": {
+            "run": "before-gpu-2",
+            "path": "/gpu",
+            "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+            "viewport": [
+              1016,
+              756,
+              1
+            ],
+            "samples": 1441,
+            "fps": 71.99960027980414,
+            "p50_ms": 14,
+            "p95_ms": 15,
+            "p99_ms": 16,
+            "over25ms": 0,
+            "over50ms": 0,
+            "resizes": 0,
+            "hidden": 0,
+            "probe": {
+              "secureContext": true,
+              "webgl2": true,
+              "webgpu": true,
+              "frames": 1806,
+              "fps": 72
+            }
+          },
+          "sample_seconds": 20.27834250003798,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            5.82568359375,
+            6.51220703125
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5521888,
+              "rss": 13287424
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 23413456,
+              "rss": 37502976
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 6701584,
+              "rss": 22446080
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 28443320,
+              "rss": 38715392
+            },
+            {
+              "name": "browser",
+              "footprint": 48579616,
+              "rss": 121438208
+            }
+          ]
+        },
+        {
+          "run": "before-restore20-2",
+          "workload": "restore20",
+          "trial": 2,
+          "cpu_percent": 1.3935387048493422,
+          "wakeups_per_second": 150.11206593665028,
+          "footprint_mib_median": 94.12879943847656,
+          "footprint_mib_peak": 98.19129943847656,
+          "process_count": 6,
+          "frames": {
+            "run": "before-restore20-2",
+            "hidden": 0,
+            "viewport": [
+              1016,
+              756,
+              1
+            ]
+          },
+          "sample_seconds": 20.338138582999818,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            5.06103515625,
+            5.6162109375
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 3064288,
+              "rss": 13238272
+            },
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10125888,
+              "rss": 39600128
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 17400456,
+              "rss": 34308096
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 6783552,
+              "rss": 22577152
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 12386952,
+              "rss": 31768576
+            },
+            {
+              "name": "browser",
+              "footprint": 48874528,
+              "rss": 122388480
+            }
+          ]
+        },
+        {
+          "run": "before-blank-3",
+          "workload": "blank",
+          "trial": 3,
+          "cpu_percent": 1.282608814613396,
+          "wakeups_per_second": 145.04240294618586,
+          "footprint_mib_median": 49.079498291015625,
+          "footprint_mib_peak": 49.516998291015625,
+          "process_count": 2,
+          "frames": null,
+          "sample_seconds": 20.352668875013478,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            4.7802734375,
+            7.216796875
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10125888,
+              "rss": 39485440
+            },
+            {
+              "name": "browser",
+              "footprint": 41304928,
+              "rss": 104398848
+            }
+          ]
+        },
+        {
+          "run": "before-static-3",
+          "workload": "static",
+          "trial": 3,
+          "cpu_percent": 1.405714197400018,
+          "wakeups_per_second": 150.23377367315055,
+          "footprint_mib_median": 87.37825012207031,
+          "footprint_mib_peak": 88.1595230102539,
+          "process_count": 5,
+          "frames": {
+            "run": "before-static-3",
+            "hidden": 0,
+            "viewport": [
+              1016,
+              756,
+              1
+            ]
+          },
+          "sample_seconds": 20.354943667014595,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            7.171875,
+            9.3740234375
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5489144,
+              "rss": 13238272
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 17547936,
+              "rss": 34078720
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 7045672,
+              "rss": 22708224
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 12485280,
+              "rss": 31834112
+            },
+            {
+              "name": "browser",
+              "footprint": 49071112,
+              "rss": 121470976
+            }
+          ]
+        },
+        {
+          "run": "before-gpu-3",
+          "workload": "gpu",
+          "trial": 3,
+          "cpu_percent": 21.24730622591976,
+          "wakeups_per_second": 339.2367995042632,
+          "footprint_mib_median": 105.25325012207031,
+          "footprint_mib_peak": 106.76887512207031,
+          "process_count": 5,
+          "frames": {
+            "run": "before-gpu-3",
+            "path": "/gpu",
+            "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+            "viewport": [
+              1016,
+              756,
+              1
+            ],
+            "samples": 1441,
+            "fps": 71.99960027980414,
+            "p50_ms": 14,
+            "p95_ms": 15,
+            "p99_ms": 16,
+            "over25ms": 0,
+            "over50ms": 0,
+            "resizes": 0,
+            "hidden": 0,
+            "probe": {
+              "secureContext": true,
+              "webgl2": true,
+              "webgpu": true,
+              "frames": 1806,
+              "fps": 72
+            }
+          },
+          "sample_seconds": 20.360409041983075,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            9.26806640625,
+            9.88720703125
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 3162592,
+              "rss": 13336576
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 23118520,
+              "rss": 37257216
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 6701584,
+              "rss": 22216704
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 25920160,
+              "rss": 37584896
+            },
+            {
+              "name": "browser",
+              "footprint": 49120264,
+              "rss": 122159104
+            }
+          ]
+        },
+        {
+          "run": "before-restore20-3",
+          "workload": "restore20",
+          "trial": 3,
+          "cpu_percent": 1.343877051142845,
+          "wakeups_per_second": 150.36530675078083,
+          "footprint_mib_median": 95.17567443847656,
+          "footprint_mib_peak": 98.47254943847656,
+          "process_count": 6,
+          "frames": {
+            "run": "before-restore20-3",
+            "hidden": 0,
+            "viewport": [
+              1016,
+              756,
+              1
+            ]
+          },
+          "sample_seconds": 20.38369133300148,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            7.6884765625,
+            9.05517578125
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 3195384,
+              "rss": 13352960
+            },
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10289752,
+              "rss": 39600128
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 17351304,
+              "rss": 33964032
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 6652432,
+              "rss": 22478848
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 12436104,
+              "rss": 31752192
+            },
+            {
+              "name": "browser",
+              "footprint": 49792032,
+              "rss": 122535936
+            }
+          ]
+        }
+      ]
+    },
+    "after": {
+      "raw_sha256": "977ea1555b2cf5cffa7f1c30d8975a0979a5fb3d30d214014c006fcf1a84f154",
+      "runs": [
+        {
+          "run": "after-blank-1",
+          "workload": "blank",
+          "trial": 1,
+          "cpu_percent": 1.0400527796466459,
+          "wakeups_per_second": 145.0694001912231,
+          "footprint_mib_median": 49.407623291015625,
+          "footprint_mib_peak": 49.845123291015625,
+          "process_count": 2,
+          "frames": null,
+          "sample_seconds": 20.30062850000104,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            5.234375,
+            6.49658203125
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10158656,
+              "rss": 39649280
+            },
+            {
+              "name": "browser",
+              "footprint": 41599840,
+              "rss": 104513536
+            }
+          ]
+        },
+        {
+          "run": "after-static-1",
+          "workload": "static",
+          "trial": 1,
+          "cpu_percent": 1.1380343811029696,
+          "wakeups_per_second": 149.85250251401544,
+          "footprint_mib_median": 87.22197723388672,
+          "footprint_mib_peak": 88.56572723388672,
+          "process_count": 5,
+          "frames": {
+            "run": "after-static-1",
+            "hidden": 0,
+            "viewport": [
+              1016,
+              756,
+              1
+            ]
+          },
+          "sample_seconds": 20.259921916993335,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            7.791015625,
+            9.9189453125
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5521888,
+              "rss": 13287424
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 17547912,
+              "rss": 34078720
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 7127568,
+              "rss": 22740992
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 12403360,
+              "rss": 31916032
+            },
+            {
+              "name": "browser",
+              "footprint": 48858144,
+              "rss": 121094144
+            }
+          ]
+        },
+        {
+          "run": "after-gpu-1",
+          "workload": "gpu",
+          "trial": 1,
+          "cpu_percent": 19.441962982572306,
+          "wakeups_per_second": 370.0829212768414,
+          "footprint_mib_median": 105.06575012207031,
+          "footprint_mib_peak": 107.33137512207031,
+          "process_count": 5,
+          "frames": {
+            "run": "after-gpu-1",
+            "path": "/gpu",
+            "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+            "viewport": [
+              1016,
+              756,
+              1
+            ],
+            "samples": 1441,
+            "fps": 71.99960027980414,
+            "p50_ms": 14,
+            "p95_ms": 15,
+            "p99_ms": 16,
+            "over25ms": 0,
+            "over50ms": 0,
+            "resizes": 0,
+            "sizes": [],
+            "hidden": 0,
+            "probe": {
+              "secureContext": true,
+              "webgl2": true,
+              "webgpu": true,
+              "frames": 1806,
+              "fps": 72
+            }
+          },
+          "sample_seconds": 20.260324292001314,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            5.7578125,
+            7.14697265625
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5505480,
+              "rss": 13287424
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 6865424,
+              "rss": 22757376
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 23298696,
+              "rss": 37699584
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 25952976,
+              "rss": 38371328
+            },
+            {
+              "name": "browser",
+              "footprint": 48596000,
+              "rss": 121585664
+            }
+          ]
+        },
+        {
+          "run": "after-restore20-1",
+          "workload": "restore20",
+          "trial": 1,
+          "cpu_percent": 1.1626953857148867,
+          "wakeups_per_second": 150.21077527891117,
+          "footprint_mib_median": 101.92567443847656,
+          "footprint_mib_peak": 102.72254943847656,
+          "process_count": 6,
+          "frames": {
+            "run": "after-restore20-1",
+            "hidden": 0,
+            "viewport": [
+              1016,
+              756,
+              1
+            ]
+          },
+          "sample_seconds": 20.27817241701996,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            14.4541015625,
+            18.029296875
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5505504,
+              "rss": 13271040
+            },
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10224192,
+              "rss": 39682048
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 17498784,
+              "rss": 34144256
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 7094800,
+              "rss": 23150592
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 12370568,
+              "rss": 31719424
+            },
+            {
+              "name": "browser",
+              "footprint": 54182968,
+              "rss": 122519552
+            }
+          ]
+        },
+        {
+          "run": "after-blank-2",
+          "workload": "blank",
+          "trial": 2,
+          "cpu_percent": 1.0492825107217145,
+          "wakeups_per_second": 145.00462485528212,
+          "footprint_mib_median": 48.98577117919922,
+          "footprint_mib_peak": 49.37639617919922,
+          "process_count": 2,
+          "frames": null,
+          "sample_seconds": 20.29590437503066,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            9.92041015625,
+            12.6318359375
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10158656,
+              "rss": 39567360
+            },
+            {
+              "name": "browser",
+              "footprint": 41206648,
+              "rss": 104103936
+            }
+          ]
+        },
+        {
+          "run": "after-static-2",
+          "workload": "static",
+          "trial": 2,
+          "cpu_percent": 1.1378126955127867,
+          "wakeups_per_second": 149.96176332198826,
+          "footprint_mib_median": 86.44072723388672,
+          "footprint_mib_peak": 87.22197723388672,
+          "process_count": 5,
+          "frames": {
+            "run": "after-static-2",
+            "hidden": 0,
+            "viewport": [
+              1016,
+              756,
+              1
+            ]
+          },
+          "sample_seconds": 20.285170916991774,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            7.50537109375,
+            8.69580078125
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5587424,
+              "rss": 13352960
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 17449632,
+              "rss": 33964032
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 7045648,
+              "rss": 23199744
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 12173960,
+              "rss": 31326208
+            },
+            {
+              "name": "browser",
+              "footprint": 48383008,
+              "rss": 120307712
+            }
+          ]
+        },
+        {
+          "run": "after-gpu-2",
+          "workload": "gpu",
+          "trial": 2,
+          "cpu_percent": 19.071377845227733,
+          "wakeups_per_second": 334.53486791010124,
+          "footprint_mib_median": 106.80012512207031,
+          "footprint_mib_peak": 109.06575012207031,
+          "process_count": 5,
+          "frames": {
+            "run": "after-gpu-2",
+            "path": "/gpu",
+            "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+            "viewport": [
+              1016,
+              756,
+              1
+            ],
+            "samples": 1441,
+            "fps": 72.00319792135112,
+            "p50_ms": 14,
+            "p95_ms": 15,
+            "p99_ms": 16,
+            "over25ms": 0,
+            "over50ms": 0,
+            "resizes": 0,
+            "sizes": [],
+            "hidden": 0,
+            "probe": {
+              "secureContext": true,
+              "webgl2": true,
+              "webgpu": true,
+              "frames": 1806,
+              "fps": 72
+            }
+          },
+          "sample_seconds": 20.26993491698522,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            5.630859375,
+            6.888671875
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5538272,
+              "rss": 13303808
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 23413432,
+              "rss": 37634048
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 6636048,
+              "rss": 22560768
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 28033672,
+              "rss": 38420480
+            },
+            {
+              "name": "browser",
+              "footprint": 48497696,
+              "rss": 120963072
+            }
+          ]
+        },
+        {
+          "run": "after-restore20-2",
+          "workload": "restore20",
+          "trial": 2,
+          "cpu_percent": 1.225617527759108,
+          "wakeups_per_second": 149.9093089378923,
+          "footprint_mib_median": 98.19134521484375,
+          "footprint_mib_peak": 98.83197021484375,
+          "process_count": 6,
+          "frames": {
+            "run": "after-restore20-2",
+            "hidden": 0,
+            "viewport": [
+              1016,
+              756,
+              1
+            ]
+          },
+          "sample_seconds": 20.272256749973167,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            4.9921875,
+            5.47314453125
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10256960,
+              "rss": 39682048
+            },
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5603832,
+              "rss": 13336576
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 17711776,
+              "rss": 34144256
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 7094800,
+              "rss": 22921216
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 12239520,
+              "rss": 31653888
+            },
+            {
+              "name": "browser",
+              "footprint": 50054200,
+              "rss": 122339328
+            }
+          ]
+        },
+        {
+          "run": "after-blank-3",
+          "workload": "blank",
+          "trial": 3,
+          "cpu_percent": 0.29539910362001975,
+          "wakeups_per_second": 22.586662524050162,
+          "footprint_mib_median": 49.470123291015625,
+          "footprint_mib_peak": 49.845123291015625,
+          "process_count": 2,
+          "frames": null,
+          "sample_seconds": 20.277453541988507,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            4.763671875,
+            5.6630859375
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10158656,
+              "rss": 39583744
+            },
+            {
+              "name": "browser",
+              "footprint": 41714528,
+              "rss": 104906752
+            }
+          ]
+        },
+        {
+          "run": "after-static-3",
+          "workload": "static",
+          "trial": 3,
+          "cpu_percent": 1.1692683620583528,
+          "wakeups_per_second": 149.92816568385987,
+          "footprint_mib_median": 90.14380645751953,
+          "footprint_mib_peak": 91.58130645751953,
+          "process_count": 5,
+          "frames": {
+            "run": "after-static-3",
+            "hidden": 0,
+            "viewport": [
+              1016,
+              756,
+              1
+            ]
+          },
+          "sample_seconds": 20.283046791970264,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            5.0244140625,
+            6.19873046875
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5571016,
+              "rss": 13336576
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 17580680,
+              "rss": 34390016
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 7012880,
+              "rss": 22986752
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 12337776,
+              "rss": 31703040
+            },
+            {
+              "name": "browser",
+              "footprint": 52020280,
+              "rss": 120717312
+            }
+          ]
+        },
+        {
+          "run": "after-gpu-3",
+          "workload": "gpu",
+          "trial": 3,
+          "cpu_percent": 19.811980340058945,
+          "wakeups_per_second": 329.75711622497704,
+          "footprint_mib_median": 103.53459167480469,
+          "footprint_mib_peak": 108.90959167480469,
+          "process_count": 5,
+          "frames": {
+            "run": "after-gpu-3",
+            "path": "/gpu",
+            "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+            "viewport": [
+              1016,
+              756,
+              1
+            ],
+            "samples": 1441,
+            "fps": 72.00319792135112,
+            "p50_ms": 14,
+            "p95_ms": 15,
+            "p99_ms": 17,
+            "over25ms": 0,
+            "over50ms": 0,
+            "resizes": 0,
+            "sizes": [],
+            "hidden": 0,
+            "probe": {
+              "secureContext": true,
+              "webgl2": true,
+              "webgpu": true,
+              "frames": 1806,
+              "fps": 72
+            }
+          },
+          "sample_seconds": 20.293724292016122,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            4.9423828125,
+            5.20166015625
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5521888,
+              "rss": 13287424
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 23347944,
+              "rss": 37617664
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 6619712,
+              "rss": 22085632
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 25920160,
+              "rss": 38469632
+            },
+            {
+              "name": "browser",
+              "footprint": 46957576,
+              "rss": 121323520
+            }
+          ]
+        },
+        {
+          "run": "after-restore20-3",
+          "workload": "restore20",
+          "trial": 3,
+          "cpu_percent": 1.171756402915974,
+          "wakeups_per_second": 150.03223098097513,
+          "footprint_mib_median": 98.30076599121094,
+          "footprint_mib_peak": 99.26949310302734,
+          "process_count": 6,
+          "frames": {
+            "run": "after-restore20-3",
+            "hidden": 0,
+            "viewport": [
+              1016,
+              756,
+              1
+            ]
+          },
+          "sample_seconds": 20.282308541995008,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            5.1787109375,
+            5.8466796875
+          ],
+          "last_processes": [
+            {
+              "name": "com.apple.audio.SandboxHelper",
+              "footprint": 5652960,
+              "rss": 13418496
+            },
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10158680,
+              "rss": 39600128
+            },
+            {
+              "name": "com.apple.WebKit.WebContent",
+              "footprint": 17580680,
+              "rss": 34275328
+            },
+            {
+              "name": "com.apple.WebKit.Networking",
+              "footprint": 7144000,
+              "rss": 23035904
+            },
+            {
+              "name": "com.apple.WebKit.GPU",
+              "footprint": 12419768,
+              "rss": 31653888
+            },
+            {
+              "name": "browser",
+              "footprint": 50119736,
+              "rss": 122355712
+            }
+          ]
+        }
+      ]
+    },
+    "after-confirm": {
+      "raw_sha256": "48a109887e7fd5a8ca7b5dc3fbba28c0071721239a111eb4c6e8b7e5e42a329f",
+      "runs": [
+        {
+          "run": "after-confirm-blank-1",
+          "workload": "blank",
+          "trial": 1,
+          "cpu_percent": 1.4682266876200671,
+          "wakeups_per_second": 145.78780885553456,
+          "footprint_mib_median": 58.23634338378906,
+          "footprint_mib_peak": 58.73634338378906,
+          "process_count": 3,
+          "frames": null,
+          "sample_seconds": 20.296621666988358,
+          "sample_count": 21,
+          "loadavg_1m_range": [
+            4.2607421875,
+            4.6943359375
+          ],
+          "last_processes": [
+            {
+              "name": "ThemeWidgetControlViewService",
+              "footprint": 8569384,
+              "rss": 34734080
+            },
+            {
+              "name": "com.apple.SafariPlatformSupport",
+              "footprint": 10093120,
+              "rss": 39583744
+            },
+            {
+              "name": "browser",
+              "footprint": 42337192,
+              "rss": 106053632
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "lifecycle": {
+    "live-five-gpu-selected": {
+      "seconds": 15.22346991597442,
+      "cpu_percent": 21.212008614484827,
+      "footprint_mib_median": 282.5716094970703,
+      "last_process_names": [
+        "com.apple.WebKit.WebContent",
+        "com.apple.WebKit.WebContent",
+        "com.apple.WebKit.WebContent",
+        "com.apple.WebKit.WebContent",
+        "com.apple.SafariPlatformSupport",
+        "MTLCompilerService",
+        "MTLCompilerService",
+        "ThemeWidgetControlViewService",
+        "com.apple.audio.SandboxHelper",
+        "MTLCompilerService",
+        "com.apple.WebKit.WebContent",
+        "com.apple.WebKit.Networking",
+        "com.apple.WebKit.GPU",
+        "MTLCompilerService",
+        "browser"
+      ],
+      "raw_sha256": "ec7c0264d7b8f512972db71bcb91ad1f8b88a58cfb869e646b8f303053aa4e8f"
+    },
+    "live-five-static-selected": {
+      "seconds": 15.23090708302334,
+      "cpu_percent": 1.2331802628443111,
+      "footprint_mib_median": 278.0559616088867,
+      "last_process_names": [
+        "com.apple.WebKit.WebContent",
+        "com.apple.WebKit.WebContent",
+        "com.apple.WebKit.WebContent",
+        "com.apple.WebKit.WebContent",
+        "com.apple.SafariPlatformSupport",
+        "MTLCompilerService",
+        "MTLCompilerService",
+        "ThemeWidgetControlViewService",
+        "com.apple.audio.SandboxHelper",
+        "MTLCompilerService",
+        "com.apple.WebKit.WebContent",
+        "com.apple.WebKit.Networking",
+        "com.apple.WebKit.GPU",
+        "MTLCompilerService",
+        "browser"
+      ],
+      "raw_sha256": "06215344058f4144d9130d5a07afa91675b194d7ef2b8f9a3282d327763fa4dd"
+    },
+    "live-one-after-close": {
+      "seconds": 15.220587709045503,
+      "cpu_percent": 1.2142076609181707,
+      "footprint_mib_median": 193.38152313232422,
+      "last_process_names": [
+        "com.apple.SafariPlatformSupport",
+        "MTLCompilerService",
+        "MTLCompilerService",
+        "ThemeWidgetControlViewService",
+        "com.apple.audio.SandboxHelper",
+        "MTLCompilerService",
+        "com.apple.WebKit.WebContent",
+        "com.apple.WebKit.Networking",
+        "com.apple.WebKit.GPU",
+        "MTLCompilerService",
+        "browser"
+      ],
+      "raw_sha256": "3c45940183a11b5adb6f63393670429b061ef85117fcf771b5cbae2a07d704ec"
+    }
+  },
+  "resize_traces": {
+    "before": {
+      "run": "resize-before",
+      "path": "/",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+      "viewport": [
+        1016,
+        756,
+        1
+      ],
+      "samples": 4309,
+      "fps": 71.79991335355083,
+      "p50_ms": 14,
+      "p95_ms": 15,
+      "p99_ms": 19,
+      "over25ms": 15,
+      "over50ms": 2,
+      "resizes": 10,
+      "sizes": [
+        [
+          8664,
+          718,
+          558
+        ],
+        [
+          14726,
+          1016,
+          756
+        ],
+        [
+          16361,
+          718,
+          558
+        ],
+        [
+          17485,
+          1016,
+          756
+        ],
+        [
+          19045,
+          718,
+          558
+        ],
+        [
+          20174,
+          1016,
+          756
+        ],
+        [
+          29747,
+          1016,
+          256
+        ],
+        [
+          44806,
+          718,
+          139
+        ],
+        [
+          46138,
+          1016,
+          337
+        ],
+        [
+          47583,
+          1016,
+          756
+        ]
+      ],
+      "hidden": 0,
+      "probe": null
+    },
+    "after": {
+      "run": "resize-after",
+      "path": "/",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+      "viewport": [
+        1016,
+        756,
+        1
+      ],
+      "samples": 4305,
+      "fps": 71.73445753420093,
+      "p50_ms": 14,
+      "p95_ms": 15,
+      "p99_ms": 20,
+      "over25ms": 18,
+      "over50ms": 1,
+      "resizes": 11,
+      "sizes": [
+        [
+          7393,
+          718,
+          558
+        ],
+        [
+          8531,
+          1016,
+          756
+        ],
+        [
+          10069,
+          718,
+          558
+        ],
+        [
+          11300,
+          1016,
+          756
+        ],
+        [
+          13001,
+          718,
+          558
+        ],
+        [
+          14156,
+          1016,
+          756
+        ],
+        [
+          19386,
+          1016,
+          256
+        ],
+        [
+          25353,
+          718,
+          58
+        ],
+        [
+          25359,
+          718,
+          139
+        ],
+        [
+          26908,
+          1016,
+          337
+        ],
+        [
+          28386,
+          1016,
+          756
+        ]
+      ],
+      "hidden": 0,
+      "probe": null
+    }
+  },
+  "notes": [
+    "before/after: 3 trials per workload, sequential cohorts on an active workstation; no compilation during samples.",
+    "after-blank-3: display-link wakeups ceased after 3 seconds; possible occlusion. Retained, not interpreted as a gain.",
+    "after-confirm: blank window raised and inspected via accessibility; extra helper and observer overhead make it non-identical. Wakeups returned to approximately 145/sec.",
+    "Resize traces include manually timed edge drags and Inspector activity, not synchronized comparative gestures.",
+    "Raw per-process time series and logs are local under artifacts/performance; this file keeps per-run results and provenance."
+  ]
+}

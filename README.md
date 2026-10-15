@@ -23,7 +23,7 @@ Normal app state lives in `~/Library/Application Support/RafiBrowser`. A profile
 
 ## What works
 
-- Native vertical tabs, URL/search field, back/forward/reload, new-window links, and URL copying.
+- Native vertical tabs, URL/search field, back/forward/reload, new-window links, and URL copying. Copy buttons briefly show a checkmark without moving the page.
 - Normal tab/session recovery with atomic saves. Restored background tabs stay unloaded until selected. Live tabs retain their page state when switched away from.
 - Private tabs use ephemeral engine storage, are omitted from saved sessions and recently closed tabs, and cannot be shared with agents.
 - Manual suspension under **Tools → Suspend Current Tab**, with an explicit warning about losing live page state. Resuming reloads the URL.
@@ -93,4 +93,4 @@ The source selects GPUI's X11 backend and embeds WebKitGTK via Wry. XWayland is 
 
 This is a working first prototype, not a hardened daily-driver browser. Safari-level privacy and aggressive performance are acceptance targets, not achieved claims. It has no custom tracking/content blocker, privacy settings, full browser sandbox distribution, password manager, extensions, download manager, or camera/microphone permission UI. Site permission requests and downloads are denied for now. Network failures still need a complete error-page flow.
 
-Automatic tab eviction is intentionally not enabled until we can reliably protect unsaved forms, media, calls, and downloads. Explicit tab close, app exit, and restoration do not preserve live forms or run a complete browser-level before-unload confirmation flow. The next performance work must measure WebKit content/GPU/network processes as well as the shell, use optimized builds, and compare identical workloads with Safari.
+Automatic tab eviction is intentionally not enabled until we can reliably protect unsaved forms, media, calls, and downloads. Explicit tab close, app exit, and restoration do not preserve live forms or run a complete browser-level before-unload confirmation flow. The repeatable macOS regression suite measures optimized builds including attributed WebKit/Metal helpers; see [PERFORMANCE.md](PERFORMANCE.md). Safari comparisons, battery/energy measurements, and complex real-site workloads remain unverified.
