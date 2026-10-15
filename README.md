@@ -67,6 +67,14 @@ cargo clippy --locked --all-targets -- -D warnings
 python3 scripts/test-server.py --port 8765
 ```
 
+To check the unavailable-page crash regression against a built app:
+
+```sh
+python3 scripts/check-offline-start.py
+```
+
+The demo tabs require this local server to stay running. If it stops, a newly opened demo shows an error with **Try again**; restart the server and retry.
+
 Open `http://127.0.0.1:8765/` for text input, tab preservation, links, scroll, and website storage checks. `/gpu` runs a WebGPU 3D cube and reports API availability; its displayed frame rate is a diagnostic, not a controlled benchmark. `/api/echo` is the request-lab target.
 
 ```sh

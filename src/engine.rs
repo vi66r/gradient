@@ -135,6 +135,40 @@ impl Page {
         }))
     }
 
+    /// WKWebView has no URL before its first navigation commits, including
+    /// after a failed initial load. Wry 0.57's macOS getter unwraps that nil.
+    /// Read the nullable native property directly so callers can handle it.
+    pub fn url(&self) -> anyhow::Result<String> {
+        #[cfg(target_os = "macos")]
+        {
+            use anyhow::Context;
+            use wry::WebViewExtMacOS;
+            let url = unsafe { self.raw.webview().URL() }
+                .and_then(|url| url.absoluteString())
+                .context("The page has no committed URL yet")?;
+            Ok(url.to_string())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(self.raw.url()?)
+        }
+    }
+
+    /// Detect a settled initial-load failure without mistaking an in-flight
+    /// navigation for failure. Later navigation failures need delegate support.
+    pub fn initial_load_failed(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            use wry::WebViewExtMacOS;
+            let view = self.raw.webview();
+            unsafe { !view.isLoading() && view.URL().is_none() }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
     pub fn hide(&self) {
         if self.visible.replace(false) {
             let _ = self.raw.focus_parent();

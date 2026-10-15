@@ -14,7 +14,7 @@ impl Browser {
         let origin = tab
             .page
             .as_ref()
-            .and_then(|p| p.raw.url().ok())
+            .and_then(|p| p.url().ok())
             .and_then(|u| mcp::origin(&u));
         let Some(origin) = origin.filter(|_| !tab.private && !tab.loading) else {
             self.notice = Some(
@@ -43,7 +43,7 @@ impl Browser {
                         && tab
                             .page
                             .as_ref()
-                            .and_then(|p| p.raw.url().ok())
+                            .and_then(|p| p.url().ok())
                             .and_then(|u| mcp::origin(&u))
                             .as_ref()
                             == Some(&origin)
@@ -66,7 +66,7 @@ impl Browser {
                 && tab
                     .page
                     .as_ref()
-                    .and_then(|p| p.raw.url().ok())
+                    .and_then(|p| p.url().ok())
                     .and_then(|u| mcp::origin(&u))
                     .as_ref()
                     != Some(origin)
@@ -135,7 +135,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Tab is suspended"))?;
         anyhow::ensure!(
-            mcp::origin(&page.raw.url()?).as_ref() == Some(&origin),
+            mcp::origin(&page.url()?).as_ref() == Some(&origin),
             "Tab changed origin"
         );
         if command.name == "browser_navigate" {

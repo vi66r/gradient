@@ -187,7 +187,7 @@ impl Browser {
                 if this
                     .update_in(cx, |this, window, cx| {
                         if let Some(page) = &this.tabs[this.active].page
-                            && let Ok(url) = page.raw.url()
+                            && let Ok(url) = page.url()
                             && model::allowed_navigation(&url)
                             && url != "about:blank"
                             && url != this.tabs[this.active].saved.url
@@ -197,6 +197,15 @@ impl Browser {
                             this.dirty = true;
                             if !this.address.read(cx).focus_handle(cx).is_focused(window) {
                                 this.sync_address(window, cx);
+                            }
+                        }
+                        for tab in &mut this.tabs {
+                            if tab.loading && tab.page.as_ref().is_some_and(|page|page.initial_load_failed()) {
+                                tab.page = None;
+                                tab.loading = false;
+                                tab.grant = None;
+                                tab.error = Some("The page could not be reached. Check the address and your connection. For a localhost page, make sure its development server is running, then try again.".into());
+                                cx.notify();
                             }
                         }
                         if this.dirty {
@@ -368,7 +377,7 @@ impl Browser {
         let url = tab
             .page
             .as_ref()
-            .and_then(|page| page.raw.url().ok())
+            .and_then(|page| page.url().ok())
             .filter(|url| model::allowed_navigation(url))
             .unwrap_or_else(|| tab.saved.url.clone());
         cx.write_to_clipboard(ClipboardItem::new_string(url));

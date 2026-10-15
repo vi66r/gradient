@@ -381,8 +381,16 @@ impl Render for Browser {
                     ),
                 )
                 .child(
-                    control("resume-tab", "Resume tab", IconName::RotateCw)
-                        .on_click(cx.listener(|this, _, w, cx| this.reload(w, cx))),
+                    control(
+                        "resume-tab",
+                        if tab.error.is_some() {
+                            "Try again"
+                        } else {
+                            "Resume tab"
+                        },
+                        IconName::RotateCw,
+                    )
+                    .on_click(cx.listener(|this, _, w, cx| this.reload(w, cx))),
                 )
                 .into_any_element()
         };
