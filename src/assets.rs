@@ -13,7 +13,13 @@ gpui::assets::icon_assets!(
         Lock,
         Moon,
         ArrowLeft,
-        ArrowUpRight
+        ArrowUpRight,
+        Bot,
+        LoaderCircle,
+        LockKeyhole,
+        CloudOff,
+        Search,
+        Info
     ]
 );
 

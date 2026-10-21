@@ -1,7 +1,7 @@
 //! Keep native web content outside GPUI's texture pipeline: WebKit owns rendering,
 //! text input, accessibility, and GPU compositing. The shell only positions it.
 use async_channel::Sender;
-use gpui::{App, Bounds, Pixels, Window};
+use gpui::{App, Bounds, Pixels, Point, Window};
 use std::{cell::Cell, rc::Rc};
 
 #[derive(Debug)]
@@ -10,6 +10,9 @@ pub enum Event {
     Loading(u64, bool, String),
     NewTab(u64, String),
     Notice(String),
+    /// A primary click in window coordinates (top-left origin) that native
+    /// views may consume before GPUI sees it.
+    NativeClick(Point<Pixels>),
     AgentResult {
         id: u64,
         epoch: u64,
@@ -169,6 +172,10 @@ impl Page {
         }
     }
 
+    pub fn contains(&self, point: Point<Pixels>) -> bool {
+        self.visible.get() && self.bounds.get().contains(&point)
+    }
+
     pub fn hide(&self) {
         if self.visible.replace(false) {
             let _ = self.raw.focus_parent();
@@ -238,6 +245,36 @@ impl Page {
             let _ = self.raw.set_visible(true);
         }
     }
+}
+
+/// Clicks on a native page go straight to WebKit, so GPUI never learns that its
+/// own text field lost focus. Report every primary click to the shell, which
+/// checks it against the visible page. Local monitors see only this app.
+#[cfg(target_os = "macos")]
+pub fn watch_native_clicks(events: Sender<Event>) {
+    use objc2_app_kit::{NSEvent, NSEventMask};
+    use std::ptr::NonNull;
+    let handler = block2::RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
+        // AppKit delivers monitored events on the main thread.
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return event.as_ptr();
+        };
+        let native = unsafe { event.as_ref() };
+        if let Some(content) = native.window(mtm).and_then(|window| window.contentView()) {
+            let location = native.locationInWindow();
+            let height = content.frame().size.height;
+            let _ = events.try_send(Event::NativeClick(gpui::point(
+                gpui::px(location.x as f32),
+                gpui::px((height - location.y) as f32),
+            )));
+        }
+        event.as_ptr()
+    });
+    // The monitor lives as long as the app; AppKit copies the handler.
+    let monitor = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::LeftMouseDown, &handler)
+    };
+    std::mem::forget(monitor);
 }
 
 #[cfg(target_os = "macos")]
@@ -316,6 +353,15 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
                 NSAutoresizingMaskOptions::ViewWidthSizable
                     | NSAutoresizingMaskOptions::ViewHeightSizable,
             );
+            // Clip the page and any docked Inspector to the shell's rounded
+            // card, just inside its 1 px border.
+            host.setWantsLayer(true);
+            let layer: *mut objc2::runtime::AnyObject = objc2::msg_send![&host, layer];
+            if let Some(layer) = layer.as_ref() {
+                let radius = f64::from(crate::ui::CARD_RADIUS - 1.);
+                let _: () = objc2::msg_send![layer, setCornerRadius: radius];
+                let _: () = objc2::msg_send![layer, setMasksToBounds: true];
+            }
             container.addSubview(&host);
             web.removeFromSuperview();
             host.addSubview(&web);

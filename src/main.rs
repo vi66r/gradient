@@ -79,6 +79,8 @@ struct Browser {
     response_summary: String,
     requesting: bool,
     grant_epoch: u64,
+    /// Follows the system appearance; see `ui::palette`.
+    dark: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -111,6 +113,10 @@ impl Browser {
                 .rows(18)
         });
         let address_events = cx.subscribe_in(&address, window, |this, input, event, window, cx| {
+            // The resting field shows the host; focus swaps in the full URL.
+            if matches!(event, InputEvent::Focus | InputEvent::Blur) {
+                cx.notify();
+            }
             if matches!(event, InputEvent::PressEnter { .. }) {
                 let value = input.read(cx).value().to_string();
                 match model::destination(&value) {
@@ -123,6 +129,8 @@ impl Browser {
             }
         });
         let (events, received) = async_channel::bounded(256);
+        #[cfg(target_os = "macos")]
+        engine::watch_native_clicks(events.clone());
         cx.spawn_in(window, async move |this, cx| {
             while let Ok(event) = received.recv().await {
                 if this
@@ -188,8 +196,15 @@ impl Browser {
             response_summary: "Ready when you are".into(),
             requesting: false,
             grant_epoch: 0,
-            _subscriptions: vec![address_events],
+            dark: false,
+            _subscriptions: vec![
+                address_events,
+                cx.observe_window_appearance(window, |this, window, cx| {
+                    this.follow_appearance(window, cx)
+                }),
+            ],
         };
+        this.follow_appearance(window, cx);
         this.activate(active, window, cx);
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -230,6 +245,20 @@ impl Browser {
         })
         .detach();
         this
+    }
+
+    fn follow_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dark = matches!(
+            window.appearance(),
+            WindowAppearance::Dark | WindowAppearance::VibrantDark
+        );
+        let mode = if self.dark {
+            ThemeMode::Dark
+        } else {
+            ThemeMode::Light
+        };
+        Theme::change(mode, Some(window), cx);
+        cx.notify();
     }
 
     fn sync_address(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -374,6 +403,22 @@ impl Browser {
         self.save();
     }
 
+    fn address_focused(&self, window: &Window, cx: &App) -> bool {
+        self.address.read(cx).focus_handle(cx).is_focused(window)
+    }
+
+    /// Abandons an address edit and hands focus back to the page.
+    fn release_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_address(window, cx);
+        window.focus(&self.focus, cx);
+        if !self.lab
+            && let Some(page) = &self.tabs[self.active].page
+        {
+            let _ = page.raw.focus();
+        }
+        cx.notify();
+    }
+
     fn focus_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(page) = &self.tabs[self.active].page {
             let _ = page.raw.focus_parent();
@@ -469,6 +514,16 @@ impl Browser {
                 }
             }
             engine::Event::Notice(message) => self.notice = Some(message),
+            engine::Event::NativeClick(point) => {
+                let on_page = !self.lab
+                    && self.tabs[self.active]
+                        .page
+                        .as_ref()
+                        .is_some_and(|page| page.contains(point));
+                if on_page && self.address_focused(window, cx) {
+                    self.release_address(window, cx);
+                }
+            }
             engine::Event::AgentResult {
                 id,
                 epoch,
@@ -689,7 +744,7 @@ fn main() -> anyhow::Result<()> {
                 titlebar: Some(TitlebarOptions {
                     title: Some("Browser".into()),
                     appears_transparent: true,
-                    traffic_light_position: Some(point(px(14.), px(14.))),
+                    traffic_light_position: Some(point(px(16.), px(16.))),
                 }),
                 ..Default::default()
             },
