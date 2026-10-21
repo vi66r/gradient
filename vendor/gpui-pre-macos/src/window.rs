@@ -655,6 +655,45 @@ unsafe fn apply_simple_fullscreen_plan(
     }
 }
 
+/// Restarts a parked display link; see [`FrameDemand`].
+fn frame_waker(state: &Arc<Mutex<MacWindowState>>) -> Rc<dyn Fn()> {
+    let lock = state.lock();
+    let demand = lock.frame_demand.clone();
+    let executor = lock.foreground_executor.clone();
+    drop(lock);
+    let window_state = Arc::downgrade(state);
+    Rc::new(move || {
+        demand.requested.set(true);
+        if !demand.parked.get() || demand.wake_scheduled.replace(true) {
+            return;
+        }
+        // GPUI may invalidate while this window's state is locked further
+        // up the stack, so restart the link from a fresh main-queue turn.
+        let demand = demand.clone();
+        let window_state = window_state.clone();
+        executor
+            .spawn(async move {
+                demand.wake_scheduled.set(false);
+                if demand.retired.get() || !demand.parked.get() {
+                    return;
+                }
+                let Some(window_state) = window_state.upgrade() else {
+                    return;
+                };
+                let mut lock = window_state.lock();
+                if lock.closed.load(Ordering::Acquire) {
+                    return;
+                }
+                lock.start_display_link();
+                // Draw now rather than a vsync later; the link paces what follows.
+                if let Some(source) = lock.frame_source.as_ref().filter(|s| s.is_running()) {
+                    source.request_frame_now();
+                }
+            })
+            .detach();
+    })
+}
+
 /// How long a window keeps receiving vsync ticks after its last presented
 /// frame or frame request. Short enough that a blinking caret parks the link
 /// between blinks; long enough to avoid stop/start churn while interacting.
@@ -1011,7 +1050,7 @@ impl MacWindowState {
 
 unsafe impl Send for MacWindowState {}
 
-pub(crate) struct MacWindow(Arc<Mutex<MacWindowState>>, MainThreadMarker);
+pub(crate) struct MacWindow(Arc<Mutex<MacWindowState>>, MainThreadMarker, Rc<dyn Fn()>);
 
 impl MacWindow {
     pub fn open(
@@ -1207,7 +1246,8 @@ impl MacWindow {
                 accesskit_adapter: None,
                 sheet_parent: None,
             }));
-            let mut window = Self(state, marker);
+            let frame_waker = frame_waker(&state);
+            let mut window = Self(state, marker, frame_waker);
 
             (*native_window).set_ivar(
                 WINDOW_STATE_IVAR,
@@ -2082,41 +2122,14 @@ impl PlatformWindow for MacWindow {
     }
 
     fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
-        let lock = self.0.lock();
-        let demand = lock.frame_demand.clone();
-        let executor = lock.foreground_executor.clone();
-        drop(lock);
-        let window_state = Arc::downgrade(&self.0);
-        Some(Rc::new(move || {
-            demand.requested.set(true);
-            if !demand.parked.get() || demand.wake_scheduled.replace(true) {
-                return;
-            }
-            // GPUI may invalidate while this window's state is locked further
-            // up the stack, so restart the link from a fresh main-queue turn.
-            let demand = demand.clone();
-            let window_state = window_state.clone();
-            executor
-                .spawn(async move {
-                    demand.wake_scheduled.set(false);
-                    if demand.retired.get() || !demand.parked.get() {
-                        return;
-                    }
-                    let Some(window_state) = window_state.upgrade() else {
-                        return;
-                    };
-                    let mut lock = window_state.lock();
-                    if lock.closed.load(Ordering::Acquire) {
-                        return;
-                    }
-                    lock.start_display_link();
-                    // Draw now rather than a vsync later; the link paces what follows.
-                    if let Some(source) = lock.frame_source.as_ref().filter(|s| s.is_running()) {
-                        source.request_frame_now();
-                    }
-                })
-                .detach();
-        }))
+        Some(self.2.clone())
+    }
+
+    // GPUI's app loop calls this after each effect flush while a window is
+    // dirty, needs presenting or has next-frame callbacks; the waker alone
+    // misses presents that dirty nothing.
+    fn schedule_frame(&self) {
+        (self.2)();
     }
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>) {
