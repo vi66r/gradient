@@ -111,7 +111,7 @@ impl Browser {
                         div()
                             .id("new-tab")
                             .role(Role::Button)
-                            .aria_label("New tab")
+                            .aria_label("Open New Tab")
                             .h(px(32.))
                             .px_2()
                             .flex()
@@ -123,7 +123,7 @@ impl Browser {
                             .text_color(rgb(p.muted))
                             .hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
                             .child(Icon::new(IconName::Plus).size_4())
-                            .child("New tab")
+                            .child("Open New Tab")
                             .on_click(cx.listener(|this, _, w, cx| {
                                 this.new_tab(START.into(), false, w, cx)
                             })),

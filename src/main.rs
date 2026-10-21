@@ -322,23 +322,27 @@ impl Browser {
         }
         let id = self.next_id;
         self.next_id += 1;
-        self.tabs.push(Tab {
-            id,
-            saved: SavedTab {
-                title: if url == START {
-                    "New tab".into()
-                } else {
-                    model::display_host(&url)
+        // Newest first: the sidebar reads top-down from what you just opened.
+        self.tabs.insert(
+            0,
+            Tab {
+                id,
+                saved: SavedTab {
+                    title: if url == START {
+                        "New tab".into()
+                    } else {
+                        model::display_host(&url)
+                    },
+                    url,
                 },
-                url,
+                private,
+                loading: false,
+                page: None,
+                error: None,
+                grant: None,
             },
-            private,
-            loading: false,
-            page: None,
-            error: None,
-            grant: None,
-        });
-        self.activate(self.tabs.len() - 1, window, cx);
+        );
+        self.activate(0, window, cx);
         if self.tabs[self.active].saved.url == START {
             self.focus_address(window, cx);
         }
