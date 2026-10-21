@@ -200,6 +200,12 @@ impl Browser {
         } else {
             tab.saved.title.clone().into()
         };
+        let site_icon = (!tab.private)
+            .then(|| favicon::host_key(&tab.saved.url))
+            .flatten()
+            .and_then(|key| self.icons.get(&key))
+            .map(|(image, _)| image.clone());
+        let resting = tab.page.is_none() && tab.saved.url != START;
         let icon = if tab.loading {
             Icon::new(IconName::LoaderCircle)
                 .size_4()
@@ -209,6 +215,14 @@ impl Browser {
                     Animation::new(Duration::from_millis(900)).repeat(),
                     |icon, delta| icon.transform(Transformation::rotate(percentage(delta))),
                 )
+                .into_any_element()
+        } else if let Some(image) = site_icon {
+            img(image)
+                .size(px(16.))
+                .flex_shrink_0()
+                .rounded(px(3.))
+                // Resting tabs keep their identity but read as asleep.
+                .when(resting, |icon| icon.opacity(0.5))
                 .into_any_element()
         } else {
             Icon::new(if tab.private {

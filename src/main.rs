@@ -2,6 +2,7 @@ extern crate gpui_kit as gpui;
 mod agent;
 mod assets;
 mod engine;
+mod favicon;
 mod http_client;
 mod mcp;
 mod model;
@@ -14,7 +15,12 @@ use gpui::component::{
 };
 use gpui::{prelude::*, *};
 use model::{START, SavedTab, Session};
-use std::{rc::Rc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
+};
 
 actions!(
     browser,
@@ -81,6 +87,11 @@ struct Browser {
     grant_epoch: u64,
     /// Follows the system appearance; see `ui::palette`.
     dark: bool,
+    /// Site icons by host key, with whether the copy is fresh enough to keep.
+    icons: HashMap<String, (Arc<Image>, bool)>,
+    /// Hosts with a fetch in flight or no usable icon this session.
+    icon_requests: HashSet<String>,
+    icon_cache: favicon::DiskCache,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -172,6 +183,7 @@ impl Browser {
         }
         let active = saved.active.min(tabs.len() - 1);
         let next_id = tabs.len() as u64 + 1;
+        let icon_cache = favicon::DiskCache::new(store.dir());
         let mut this = Self {
             tabs,
             context: wry::WebContext::new(Some(session::data_dir().join("webkit"))),
@@ -197,6 +209,9 @@ impl Browser {
             requesting: false,
             grant_epoch: 0,
             dark: false,
+            icons: HashMap::new(),
+            icon_requests: HashSet::new(),
+            icon_cache,
             _subscriptions: vec![
                 address_events,
                 cx.observe_window_appearance(window, |this, window, cx| {
@@ -205,6 +220,17 @@ impl Browser {
             ],
         };
         this.follow_appearance(window, cx);
+        // Restored tabs show cached icons before (or without) loading.
+        for tab in this.tabs.iter().filter(|tab| !tab.private) {
+            if let Some(key) = favicon::host_key(&tab.saved.url)
+                && !this.icons.contains_key(&key)
+                && let Some((bytes, fresh)) = this.icon_cache.read(&key)
+                && let Some(format) = favicon::sniff(&bytes)
+            {
+                this.icons
+                    .insert(key, (Arc::new(Image::from_bytes(format, bytes)), fresh));
+            }
+        }
         this.activate(active, window, cx);
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -505,6 +531,9 @@ impl Browser {
                         self.tabs[index].saved.url = url;
                         self.dirty = true;
                     }
+                    if !loading {
+                        self.request_icon(index);
+                    }
                     if index == self.active
                         && !self.address.read(cx).focus_handle(cx).is_focused(window)
                     {
@@ -518,6 +547,19 @@ impl Browser {
                 }
             }
             engine::Event::Notice(message) => self.notice = Some(message),
+            engine::Event::Icon(key, bytes) => {
+                match bytes.and_then(|bytes| Some((favicon::sniff(&bytes)?, bytes))) {
+                    Some((format, bytes)) => {
+                        self.icon_requests.remove(&key);
+                        self.icons
+                            .insert(key, (Arc::new(Image::from_bytes(format, bytes)), true));
+                    }
+                    // Leave the host marked so a failing site isn't asked again.
+                    None => {
+                        self.icon_requests.insert(key);
+                    }
+                }
+            }
             engine::Event::NativeClick(point) => {
                 let on_page = !self.lab
                     && self.tabs[self.active]
@@ -537,6 +579,62 @@ impl Browser {
             } => self.finish_agent(id, epoch, origin, reply, value),
         }
         cx.notify();
+    }
+
+    /// Uses the disk copy when fresh; otherwise asks the page which icon it
+    /// declares and fetches that off the UI thread. Never for private tabs.
+    fn request_icon(&mut self, index: usize) {
+        let tab = &self.tabs[index];
+        let Some(key) = (!tab.private)
+            .then(|| favicon::host_key(&tab.saved.url))
+            .flatten()
+        else {
+            return;
+        };
+        if self.icons.get(&key).is_some_and(|(_, fresh)| *fresh)
+            || self.icon_requests.contains(&key)
+        {
+            return;
+        }
+        if !self.icons.contains_key(&key)
+            && let Some((bytes, fresh)) = self.icon_cache.read(&key)
+            && let Some(format) = favicon::sniff(&bytes)
+        {
+            self.icons.insert(
+                key.clone(),
+                (Arc::new(Image::from_bytes(format, bytes)), fresh),
+            );
+            if fresh {
+                return;
+            }
+        }
+        let Some(page) = &tab.page else {
+            return;
+        };
+        self.icon_requests.insert(key.clone());
+        let page_url = tab.saved.url.clone();
+        let events = self.events.clone();
+        let cache = self.icon_cache.clone();
+        let _ = page
+            .raw
+            .evaluate_script_with_callback(favicon::DISCOVER, move |json| {
+                let found: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+                let text = |field: &str| found.get(field).and_then(|value| value.as_str());
+                // The tab may have moved on before the script ran.
+                let same_host = text("page").and_then(favicon::host_key).as_ref() == Some(&key);
+                let icon = same_host
+                    .then(|| favicon::icon_url(&page_url, text("href")))
+                    .flatten();
+                let agent = text("agent").unwrap_or_default().to_string();
+                let (key, cache, events) = (key.clone(), cache.clone(), events.clone());
+                std::thread::spawn(move || {
+                    let bytes = icon.and_then(|icon| favicon::fetch(&icon, &agent).ok());
+                    if let Some(bytes) = &bytes {
+                        let _ = cache.write(&key, bytes);
+                    }
+                    let _ = events.try_send(engine::Event::Icon(key, bytes));
+                });
+            });
     }
 
     fn history(&self, forward: bool) {

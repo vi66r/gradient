@@ -10,6 +10,8 @@ pub enum Event {
     Loading(u64, bool, String),
     NewTab(u64, String),
     Notice(String),
+    /// A fetched site icon for a host key, or `None` when none could be used.
+    Icon(String, Option<Vec<u8>>),
     /// A primary click in window coordinates (top-left origin) that native
     /// views may consume before GPUI sees it.
     NativeClick(Point<Pixels>),

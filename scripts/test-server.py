@@ -21,6 +21,13 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
             return
+        if self.path.split("?")[0] == "/icon.svg":
+            content = (ROOT / "icon.svg").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/svg+xml")
+            self.end_headers()
+            self.wfile.write(content)
+            return
         if self.path.startswith("/api/"):
             return self.api()
         name = "gpu.html" if self.path.startswith("/gpu") else "browser.html"

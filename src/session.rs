@@ -53,6 +53,10 @@ impl Store {
         anyhow::bail!("Only macOS and Linux are supported.")
     }
 
+    pub fn dir(&self) -> &std::path::Path {
+        &self.dir
+    }
+
     pub fn load(&mut self) -> Result<Session> {
         let path = self.dir.join("session.json");
         if !path.exists() {
