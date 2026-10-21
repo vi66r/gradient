@@ -43,6 +43,8 @@ Memory is unchanged. These footprints are higher than the 2026-10-15 cohort beca
 
 This also explains the 2026-10-15 `after-blank-3` anomaly, where shell wakeups fell to ~1/sec. That window was most likely occluded, which stops the display link. The visibility guard now rejects such runs.
 
+A focused address bar keeps its caret blinking. In 10-second spot checks of the app process alone, the caret costs 30.3 wakeups/s and 1.01% CPU with the patch, against 123.8/s and 1.91% without. Each blink holds the link for one 100 ms park delay.
+
 Not measured: battery or energy, input latency with the link parked and woken, and behavior on an external 60 Hz display. Interactive UI checks are listed in VALIDATION.md.
 
 ## 2026-10-15 results
