@@ -18,7 +18,32 @@ Each of three trials contains a blank window, an idle static interaction fixture
 
 `perf-processes.c` attributes the app plus its XPC/Metal helpers using macOS's responsibility SPI. It refuses launches that inherit another process's responsibility. `proc_pid_rusage` supplies per-process physical footprint, resident memory, CPU time and interrupt wakeups. CPU Mach absolute-time ticks are converted with `mach_timebase_info`; 100% CPU means one logical core. Reported memory is the sum of OS physical-footprint accounting, not shell RSS. Raw per-process records remain available for inspection. Helpers that exit between samples can have unobserved work; this is a steady-state suite, not a complete launch-energy accounting tool.
 
+`window-visibility.c` samples the app's main window every second. Each run aborts unless at least 90% of the window stays uncovered on the current Space. An occluded window stops GPUI's display link, so a hidden window understates idle wakeups. Window bounds and ownership need no Screen Recording permission. The runner also reports the app process's own wakeups separately from its WebKit helpers.
+
 The SPI is confined to a developer diagnostic executable and is not shipped or linked into Browser. Its availability and attribution are checked on each invocation. GPU page reports track hidden-page transitions and surface WebGPU errors. Static reports check visibility when the report is sent; blank windows have no page visibility guard. See the anomalous blank run below. The runner aborts on missing reports or inaccessible process samples.
+
+## 2026-10-20 results: idle display-link parking
+
+Apple M1 Max MacBook Pro on its built-in 120 Hz ProMotion display, DPR 2. Window 1240×820 points, page viewport 1016×757. Baseline is commit `6d70744` with upstream `gpui-pre-macos`. The candidate is the same app with the vendored backend from [vendor/README.md](vendor/README.md). Every sample of all 24 runs passed the visibility guard. Per-run data, per-process splits and raw-data hashes are in [benchmarks/2026-10-20.json](benchmarks/2026-10-20.json).
+
+Three-trial medians, before → after:
+
+| Workload | Total wakeups/s | App-process wakeups/s | Total CPU |
+|---|---|---|---|
+| Blank window | 121.1 → **1.1** | 121.0 → 1.0 | 1.11% → **0.04%** |
+| Static page | 125.7 → **5.7** | 122.3 → 2.4 | 1.23% → **0.17%** |
+| 20 restored tabs | 125.9 → **5.8** | 122.3 → 2.3 | 1.21% → **0.17%** |
+| WebGPU cube | 299.6 → **178.1** | 272.7 → 151.7 | 22.32% → 23.16% |
+
+All three trials of each workload agreed within a few tenths. The ~121 removed wakeups/sec match one GPUI display-link tick per 120 Hz vsync. The blank window's remaining 1/sec is the shell's one-second URL/session poll (`main.rs`). The static workloads' extra ~3/sec come from WebKit helpers and the fixture's reporting timer.
+
+WebGPU frame pacing is unchanged: 60 FPS in all six runs, p95 19–20 ms → 19 ms, p99 22 → 21 ms, zero intervals over 50 ms. The cube page still paces at 60 FPS on this display. GPU-workload CPU did not fall, because the app process's share there (7.8–8.0% in both cohorts) is WebKit compositing inside the app. All three candidate GPU runs were 0.6–1.2 points higher in total. The difference is in WebKit's GPU process (7.2–7.4% → 7.8–8.0%), not Browser's own process. The 1-minute load average reached 14–16 during two candidate GPU runs. This difference is unexplained and is not counted as a gain or a regression.
+
+Memory is unchanged. These footprints are higher than the 2026-10-15 cohort because that cohort ran on an external display at DPR 1. Do not compare memory across the two cohorts.
+
+This also explains the 2026-10-15 `after-blank-3` anomaly, where shell wakeups fell to ~1/sec. That window was most likely occluded, which stops the display link. The visibility guard now rejects such runs.
+
+Not measured: battery or energy, input latency with the link parked and woken, and behavior on an external 60 Hz display. Interactive UI checks are listed in VALIDATION.md.
 
 ## 2026-10-15 results
 
@@ -51,4 +76,4 @@ The revised release was also exercised with one static page containing an unsave
 
 Closing the four GPU tabs, then waiting five seconds and sampling for 15 seconds, reduced footprint to 193.4 MiB and left one WebContent process. Compiler, Inspector-related and GPU caches remained warm, so this did not return to a fresh static-session baseline. The draft survived throughout. This is one sequential lifecycle observation of the revised app, not evidence that this patch introduced background throttling or a long-session memory guarantee.
 
-A separate five-second idle `sample` trace showed an active CVDisplayLink thread. The pinned GPUI macOS backend starts this source while the window is visible. Together with the measured idle interrupt wakeups, that identifies a concrete next profiling target; it does not attribute every wakeup to that source or quantify battery impact.
+A separate five-second idle `sample` trace showed an active CVDisplayLink thread. The pinned GPUI macOS backend started this source while the window was visible. The 2026-10-20 results above confirm it as the source of nearly all idle wakeups and remove it.

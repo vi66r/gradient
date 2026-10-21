@@ -337,6 +337,16 @@ impl WindowFrameSource {
         self.signal.take()
     }
 
+    pub fn is_running(&self) -> bool {
+        self.registration.is_some()
+    }
+
+    /// Delivers one frame request on the main queue without waiting for the
+    /// next vsync, coalescing with any request already pending.
+    pub fn request_frame_now(&self) {
+        self.frame_requests.merge_data(1);
+    }
+
     pub fn stop(&mut self) {
         if let Some((display_id, subscriber_id)) = self.registration.take() {
             unsubscribe(display_id, subscriber_id);

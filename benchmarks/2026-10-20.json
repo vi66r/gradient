@@ -1,0 +1,827 @@
+{
+ "date": "2026-10-20",
+ "machine": "Apple M1 Max MacBook Pro, built-in 120 Hz ProMotion display, DPR 2; 1240x820-point window",
+ "baseline": "6d70744 (upstream gpui-pre-macos 0.3.9)",
+ "candidate": "vendored gpui-pre-macos with idle display-link parking",
+ "note": "Every sample required the window >=90% uncovered on the current Space (scripts/window-visibility.c).",
+ "cohorts": {
+  "idle-baseline": {
+   "raw_sha256": "bc67ac2378a4e6dcff17f66edc05d314024058c6801856e52a23b8a8be4bc8e5",
+   "medians": {
+    "blank": {
+     "cpu_percent": 1.11,
+     "wakeups_per_second": 121.1,
+     "app_wakeups_per_second": 121.0,
+     "footprint_mib_median": 71.8
+    },
+    "static": {
+     "cpu_percent": 1.23,
+     "wakeups_per_second": 125.7,
+     "app_wakeups_per_second": 122.3,
+     "footprint_mib_median": 130.1
+    },
+    "gpu": {
+     "cpu_percent": 22.32,
+     "wakeups_per_second": 299.6,
+     "app_wakeups_per_second": 272.7,
+     "footprint_mib_median": 160.0
+    },
+    "restore20": {
+     "cpu_percent": 1.21,
+     "wakeups_per_second": 125.9,
+     "app_wakeups_per_second": 122.3,
+     "footprint_mib_median": 140.9
+    }
+   },
+   "runs": [
+    {
+     "run": "idle-baseline-blank-1",
+     "workload": "blank",
+     "cpu_percent": 1.06,
+     "wakeups_per_second": 121.8,
+     "app_wakeups_per_second": 121.8,
+     "footprint_mib_median": 72.0,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 4.2,
+     "processes": {
+      "com.apple.SafariPlatformSupport": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "app": {
+       "cpu_percent": 1.06,
+       "wakeups_per_second": 121.8
+      }
+     }
+    },
+    {
+     "run": "idle-baseline-static-1",
+     "workload": "static",
+     "cpu_percent": 1.22,
+     "wakeups_per_second": 125.5,
+     "app_wakeups_per_second": 122.3,
+     "footprint_mib_median": 128.0,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 3.4,
+     "processes": {
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.8
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.1
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.4
+      },
+      "app": {
+       "cpu_percent": 1.12,
+       "wakeups_per_second": 122.3
+      }
+     }
+    },
+    {
+     "run": "idle-baseline-gpu-1",
+     "workload": "gpu",
+     "cpu_percent": 22.48,
+     "wakeups_per_second": 300.7,
+     "app_wakeups_per_second": 273.5,
+     "footprint_mib_median": 159.2,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 3.9,
+     "processes": {
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 7.2,
+       "wakeups_per_second": 15.2
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.4
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 7.38,
+       "wakeups_per_second": 10.6
+      },
+      "app": {
+       "cpu_percent": 7.86,
+       "wakeups_per_second": 273.5
+      }
+     },
+     "fps": 59.96102533353321,
+     "p50_ms": 17,
+     "p95_ms": 20,
+     "p99_ms": 22,
+     "over25ms": 1,
+     "over50ms": 0
+    },
+    {
+     "run": "idle-baseline-restore20-1",
+     "workload": "restore20",
+     "cpu_percent": 1.21,
+     "wakeups_per_second": 125.6,
+     "app_wakeups_per_second": 122.3,
+     "footprint_mib_median": 141.2,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 3.4,
+     "processes": {
+      "com.apple.SafariPlatformSupport": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.1
+      },
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.7
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.2
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.4
+      },
+      "app": {
+       "cpu_percent": 1.12,
+       "wakeups_per_second": 122.3
+      }
+     }
+    },
+    {
+     "run": "idle-baseline-blank-2",
+     "workload": "blank",
+     "cpu_percent": 1.12,
+     "wakeups_per_second": 121.1,
+     "app_wakeups_per_second": 121.0,
+     "footprint_mib_median": 71.7,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 3.7,
+     "processes": {
+      "com.apple.SafariPlatformSupport": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "app": {
+       "cpu_percent": 1.12,
+       "wakeups_per_second": 121.0
+      }
+     }
+    },
+    {
+     "run": "idle-baseline-static-2",
+     "workload": "static",
+     "cpu_percent": 1.27,
+     "wakeups_per_second": 125.7,
+     "app_wakeups_per_second": 122.4,
+     "footprint_mib_median": 130.1,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 4.3,
+     "processes": {
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.8
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.1
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.4
+      },
+      "app": {
+       "cpu_percent": 1.17,
+       "wakeups_per_second": 122.4
+      }
+     }
+    },
+    {
+     "run": "idle-baseline-gpu-2",
+     "workload": "gpu",
+     "cpu_percent": 22.32,
+     "wakeups_per_second": 299.6,
+     "app_wakeups_per_second": 272.7,
+     "footprint_mib_median": 162.1,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 4.0,
+     "processes": {
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 7.16,
+       "wakeups_per_second": 15.2
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.1
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 7.27,
+       "wakeups_per_second": 10.6
+      },
+      "app": {
+       "cpu_percent": 7.84,
+       "wakeups_per_second": 272.7
+      }
+     },
+     "fps": 59.97203635274143,
+     "p50_ms": 17,
+     "p95_ms": 19,
+     "p99_ms": 22,
+     "over25ms": 2,
+     "over50ms": 0
+    },
+    {
+     "run": "idle-baseline-restore20-2",
+     "workload": "restore20",
+     "cpu_percent": 1.2,
+     "wakeups_per_second": 125.9,
+     "app_wakeups_per_second": 122.3,
+     "footprint_mib_median": 140.9,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 4.1,
+     "processes": {
+      "com.apple.SafariPlatformSupport": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.1
+      },
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.7
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.4
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.4
+      },
+      "app": {
+       "cpu_percent": 1.1,
+       "wakeups_per_second": 122.3
+      }
+     }
+    },
+    {
+     "run": "idle-baseline-blank-3",
+     "workload": "blank",
+     "cpu_percent": 1.11,
+     "wakeups_per_second": 121.0,
+     "app_wakeups_per_second": 121.0,
+     "footprint_mib_median": 71.8,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 3.9,
+     "processes": {
+      "com.apple.SafariPlatformSupport": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "app": {
+       "cpu_percent": 1.11,
+       "wakeups_per_second": 121.0
+      }
+     }
+    },
+    {
+     "run": "idle-baseline-static-3",
+     "workload": "static",
+     "cpu_percent": 1.23,
+     "wakeups_per_second": 125.9,
+     "app_wakeups_per_second": 122.2,
+     "footprint_mib_median": 130.5,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 4.6,
+     "processes": {
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.8
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.4
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.4
+      },
+      "app": {
+       "cpu_percent": 1.13,
+       "wakeups_per_second": 122.2
+      }
+     }
+    },
+    {
+     "run": "idle-baseline-gpu-3",
+     "workload": "gpu",
+     "cpu_percent": 22.24,
+     "wakeups_per_second": 295.8,
+     "app_wakeups_per_second": 269.7,
+     "footprint_mib_median": 160.0,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 5.3,
+     "processes": {
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 7.06,
+       "wakeups_per_second": 14.8
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.1
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 7.23,
+       "wakeups_per_second": 10.3
+      },
+      "app": {
+       "cpu_percent": 7.91,
+       "wakeups_per_second": 269.7
+      }
+     },
+     "fps": 59.98800239952009,
+     "p50_ms": 17,
+     "p95_ms": 20,
+     "p99_ms": 22,
+     "over25ms": 1,
+     "over50ms": 0
+    },
+    {
+     "run": "idle-baseline-restore20-3",
+     "workload": "restore20",
+     "cpu_percent": 1.23,
+     "wakeups_per_second": 126.0,
+     "app_wakeups_per_second": 122.4,
+     "footprint_mib_median": 138.8,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 4.5,
+     "processes": {
+      "com.apple.SafariPlatformSupport": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.1
+      },
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.9
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.1
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.4
+      },
+      "app": {
+       "cpu_percent": 1.13,
+       "wakeups_per_second": 122.4
+      }
+     }
+    }
+   ]
+  },
+  "idle-candidate": {
+   "raw_sha256": "29bb846f558fb504c813fb2d23512c222a9f1e664f77a5bcfcb597aaaeabdbd2",
+   "medians": {
+    "blank": {
+     "cpu_percent": 0.04,
+     "wakeups_per_second": 1.1,
+     "app_wakeups_per_second": 1.0,
+     "footprint_mib_median": 71.9
+    },
+    "static": {
+     "cpu_percent": 0.17,
+     "wakeups_per_second": 5.7,
+     "app_wakeups_per_second": 2.4,
+     "footprint_mib_median": 128.5
+    },
+    "gpu": {
+     "cpu_percent": 23.16,
+     "wakeups_per_second": 178.1,
+     "app_wakeups_per_second": 151.7,
+     "footprint_mib_median": 160.4
+    },
+    "restore20": {
+     "cpu_percent": 0.17,
+     "wakeups_per_second": 5.8,
+     "app_wakeups_per_second": 2.3,
+     "footprint_mib_median": 140.3
+    }
+   },
+   "runs": [
+    {
+     "run": "idle-candidate-blank-1",
+     "workload": "blank",
+     "cpu_percent": 0.05,
+     "wakeups_per_second": 1.1,
+     "app_wakeups_per_second": 1.0,
+     "footprint_mib_median": 71.9,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 4.1,
+     "processes": {
+      "com.apple.SafariPlatformSupport": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "app": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.0
+      }
+     }
+    },
+    {
+     "run": "idle-candidate-static-1",
+     "workload": "static",
+     "cpu_percent": 0.17,
+     "wakeups_per_second": 5.6,
+     "app_wakeups_per_second": 2.3,
+     "footprint_mib_median": 128.1,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 3.0,
+     "processes": {
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 0.06,
+       "wakeups_per_second": 1.8
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.2
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.4
+      },
+      "app": {
+       "cpu_percent": 0.06,
+       "wakeups_per_second": 2.3
+      }
+     }
+    },
+    {
+     "run": "idle-candidate-gpu-1",
+     "workload": "gpu",
+     "cpu_percent": 23.5,
+     "wakeups_per_second": 176.2,
+     "app_wakeups_per_second": 150.2,
+     "footprint_mib_median": 161.9,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 3.4,
+     "processes": {
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 7.4,
+       "wakeups_per_second": 14.7
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.1
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 8.0,
+       "wakeups_per_second": 10.2
+      },
+      "app": {
+       "cpu_percent": 8.05,
+       "wakeups_per_second": 150.2
+      }
+     },
+     "fps": 59.99400059994001,
+     "p50_ms": 17,
+     "p95_ms": 19,
+     "p99_ms": 21,
+     "over25ms": 1,
+     "over50ms": 0
+    },
+    {
+     "run": "idle-candidate-restore20-1",
+     "workload": "restore20",
+     "cpu_percent": 0.16,
+     "wakeups_per_second": 5.8,
+     "app_wakeups_per_second": 2.3,
+     "footprint_mib_median": 140.3,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 3.1,
+     "processes": {
+      "com.apple.SafariPlatformSupport": {
+       "cpu_percent": 0.01,
+       "wakeups_per_second": 0.1
+      },
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.2
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.8
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.4
+      },
+      "app": {
+       "cpu_percent": 0.06,
+       "wakeups_per_second": 2.3
+      }
+     }
+    },
+    {
+     "run": "idle-candidate-blank-2",
+     "workload": "blank",
+     "cpu_percent": 0.04,
+     "wakeups_per_second": 1.1,
+     "app_wakeups_per_second": 1.0,
+     "footprint_mib_median": 71.9,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 2.6,
+     "processes": {
+      "com.apple.SafariPlatformSupport": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.1
+      },
+      "app": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.0
+      }
+     }
+    },
+    {
+     "run": "idle-candidate-static-2",
+     "workload": "static",
+     "cpu_percent": 0.17,
+     "wakeups_per_second": 6.0,
+     "app_wakeups_per_second": 2.4,
+     "footprint_mib_median": 128.5,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 2.6,
+     "processes": {
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 0.06,
+       "wakeups_per_second": 1.8
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.4
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.4
+      },
+      "app": {
+       "cpu_percent": 0.06,
+       "wakeups_per_second": 2.4
+      }
+     }
+    },
+    {
+     "run": "idle-candidate-gpu-2",
+     "workload": "gpu",
+     "cpu_percent": 22.89,
+     "wakeups_per_second": 178.1,
+     "app_wakeups_per_second": 151.7,
+     "footprint_mib_median": 160.4,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 14.3,
+     "processes": {
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 7.22,
+       "wakeups_per_second": 14.9
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.2
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 7.84,
+       "wakeups_per_second": 10.2
+      },
+      "app": {
+       "cpu_percent": 7.79,
+       "wakeups_per_second": 151.7
+      }
+     },
+     "fps": 59.99600359676291,
+     "p50_ms": 17,
+     "p95_ms": 19,
+     "p99_ms": 21,
+     "over25ms": 0,
+     "over50ms": 0
+    },
+    {
+     "run": "idle-candidate-restore20-2",
+     "workload": "restore20",
+     "cpu_percent": 0.17,
+     "wakeups_per_second": 5.7,
+     "app_wakeups_per_second": 2.3,
+     "footprint_mib_median": 140.7,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 8.8,
+     "processes": {
+      "com.apple.SafariPlatformSupport": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.1
+      },
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.8
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.1
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.4
+      },
+      "app": {
+       "cpu_percent": 0.06,
+       "wakeups_per_second": 2.3
+      }
+     }
+    },
+    {
+     "run": "idle-candidate-blank-3",
+     "workload": "blank",
+     "cpu_percent": 0.04,
+     "wakeups_per_second": 1.0,
+     "app_wakeups_per_second": 1.0,
+     "footprint_mib_median": 71.8,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 5.9,
+     "processes": {
+      "com.apple.SafariPlatformSupport": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "app": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.0
+      }
+     }
+    },
+    {
+     "run": "idle-candidate-static-3",
+     "workload": "static",
+     "cpu_percent": 0.17,
+     "wakeups_per_second": 5.7,
+     "app_wakeups_per_second": 2.4,
+     "footprint_mib_median": 129.7,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 6.1,
+     "processes": {
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 0.06,
+       "wakeups_per_second": 1.8
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.1
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.4
+      },
+      "app": {
+       "cpu_percent": 0.06,
+       "wakeups_per_second": 2.4
+      }
+     }
+    },
+    {
+     "run": "idle-candidate-gpu-3",
+     "workload": "gpu",
+     "cpu_percent": 23.16,
+     "wakeups_per_second": 178.2,
+     "app_wakeups_per_second": 151.9,
+     "footprint_mib_median": 160.1,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 15.7,
+     "processes": {
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 7.28,
+       "wakeups_per_second": 15.2
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.04,
+       "wakeups_per_second": 1.1
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 7.94,
+       "wakeups_per_second": 10.0
+      },
+      "app": {
+       "cpu_percent": 7.9,
+       "wakeups_per_second": 151.9
+      }
+     },
+     "fps": 59.98701363568253,
+     "p50_ms": 17,
+     "p95_ms": 19,
+     "p99_ms": 21,
+     "over25ms": 1,
+     "over50ms": 0
+    },
+    {
+     "run": "idle-candidate-restore20-3",
+     "workload": "restore20",
+     "cpu_percent": 0.19,
+     "wakeups_per_second": 5.8,
+     "app_wakeups_per_second": 2.3,
+     "footprint_mib_median": 140.3,
+     "min_visible_fraction": 1.0,
+     "loadavg_1m_start": 9.8,
+     "processes": {
+      "com.apple.SafariPlatformSupport": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.1
+      },
+      "com.apple.audio.SandboxHelper": {
+       "cpu_percent": 0.0,
+       "wakeups_per_second": 0.0
+      },
+      "com.apple.WebKit.WebContent": {
+       "cpu_percent": 0.06,
+       "wakeups_per_second": 1.9
+      },
+      "com.apple.WebKit.Networking": {
+       "cpu_percent": 0.05,
+       "wakeups_per_second": 1.2
+      },
+      "com.apple.WebKit.GPU": {
+       "cpu_percent": 0.01,
+       "wakeups_per_second": 0.4
+      },
+      "app": {
+       "cpu_percent": 0.06,
+       "wakeups_per_second": 2.3
+      }
+     }
+    }
+   ]
+  }
+ }
+}

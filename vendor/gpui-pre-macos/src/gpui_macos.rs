@@ -1,4 +1,6 @@
 #![cfg(target_os = "macos")]
+// Vendored: crates.io builds cap these lints; keep our patch's warnings visible.
+#![allow(deprecated)]
 //! macOS platform implementation for GPUI.
 //!
 //! macOS screens have a y axis that goes up from the bottom of the screen and

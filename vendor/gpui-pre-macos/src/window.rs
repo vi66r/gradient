@@ -655,6 +655,58 @@ unsafe fn apply_simple_fullscreen_plan(
     }
 }
 
+/// How long a window keeps receiving vsync ticks after its last presented
+/// frame or frame request. Short enough that a blinking caret parks the link
+/// between blinks; long enough to avoid stop/start churn while interacting.
+const IDLE_FRAME_PARK_DELAY: Duration = Duration::from_millis(100);
+
+/// Demand-driven pacing for the display link.
+///
+/// Upstream keeps the link running whenever the window is visible and lets
+/// GPUI discard clean frames, which wakes the process on every vsync (120 Hz
+/// on ProMotion panels) while idle. GPUI already supports platforms that stop
+/// requesting frames: it calls the window's frame waker whenever the window
+/// becomes dirty, gains next-frame callbacks or defers a throttled frame.
+/// Presenting (including GPUI's sustained presentation after high-rate input)
+/// counts as activity, so animation and input pacing are unchanged.
+///
+/// Only touched on the main thread.
+struct FrameDemand {
+    requested: Cell<bool>,
+    last_active: Cell<std::time::Instant>,
+    /// The link was stopped for idleness, not occlusion; a wake restarts it.
+    parked: Cell<bool>,
+    wake_scheduled: Cell<bool>,
+    retired: Cell<bool>,
+}
+
+impl FrameDemand {
+    fn new() -> Self {
+        Self {
+            requested: Cell::new(false),
+            last_active: Cell::new(std::time::Instant::now()),
+            parked: Cell::new(false),
+            wake_scheduled: Cell::new(false),
+            retired: Cell::new(false),
+        }
+    }
+
+    fn unpark(&self) {
+        self.parked.set(false);
+        self.last_active.set(std::time::Instant::now());
+    }
+
+    /// Records one frame tick; true once the window has been idle long enough to park.
+    fn idle_after_frame(&self, presented: bool) -> bool {
+        let now = std::time::Instant::now();
+        if presented || self.requested.take() {
+            self.last_active.set(now);
+            return false;
+        }
+        now.duration_since(self.last_active.get()) >= IDLE_FRAME_PARK_DELAY
+    }
+}
+
 struct MacWindowState {
     handle: AnyWindowHandle,
     foreground_executor: ForegroundExecutor,
@@ -666,6 +718,9 @@ struct MacWindowState {
     cursor_style: CursorStyle,
     cursor_visible: Arc<AtomicBool>,
     frame_source: Option<WindowFrameSource>,
+    frame_demand: Rc<FrameDemand>,
+    // Set by `draw` so `step` can tell presenting frames from idle ticks.
+    presented: bool,
     renderer: renderer::Renderer,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
@@ -835,6 +890,7 @@ impl MacWindowState {
 
     fn start_display_link(&mut self) {
         self.stop_display_link();
+        self.frame_demand.unpark();
         unsafe {
             if !self
                 .native_window
@@ -1100,6 +1156,8 @@ impl MacWindow {
                 cursor_style: CursorStyle::Arrow,
                 cursor_visible,
                 frame_source: None,
+                frame_demand: Rc::new(FrameDemand::new()),
+                presented: false,
                 renderer: renderer::new_renderer(
                     renderer_context,
                     native_window as *mut _,
@@ -1387,6 +1445,7 @@ impl Drop for MacWindow {
         // the adapter here so the native view, its `CAMetalLayer` and the
         // renderer's command queue are actually released with the window.
         drop(this.accesskit_adapter.take());
+        this.frame_demand.retired.set(true);
         this.renderer.destroy();
         let window = this.native_window;
         let sheet_parent = this.sheet_parent.take();
@@ -2022,6 +2081,44 @@ impl PlatformWindow for MacWindow {
         self.0.as_ref().lock().request_frame_callback = Some(callback);
     }
 
+    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
+        let lock = self.0.lock();
+        let demand = lock.frame_demand.clone();
+        let executor = lock.foreground_executor.clone();
+        drop(lock);
+        let window_state = Arc::downgrade(&self.0);
+        Some(Rc::new(move || {
+            demand.requested.set(true);
+            if !demand.parked.get() || demand.wake_scheduled.replace(true) {
+                return;
+            }
+            // GPUI may invalidate while this window's state is locked further
+            // up the stack, so restart the link from a fresh main-queue turn.
+            let demand = demand.clone();
+            let window_state = window_state.clone();
+            executor
+                .spawn(async move {
+                    demand.wake_scheduled.set(false);
+                    if demand.retired.get() || !demand.parked.get() {
+                        return;
+                    }
+                    let Some(window_state) = window_state.upgrade() else {
+                        return;
+                    };
+                    let mut lock = window_state.lock();
+                    if lock.closed.load(Ordering::Acquire) {
+                        return;
+                    }
+                    lock.start_display_link();
+                    // Draw now rather than a vsync later; the link paces what follows.
+                    if let Some(source) = lock.frame_source.as_ref().filter(|s| s.is_running()) {
+                        source.request_frame_now();
+                    }
+                })
+                .detach();
+        }))
+    }
+
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>) {
         self.0.as_ref().lock().event_callback = Some(callback);
     }
@@ -2123,6 +2220,7 @@ impl PlatformWindow for MacWindow {
 
     fn draw(&self, scene: &gpui::Scene) {
         let mut this = self.0.lock();
+        this.presented = true;
         this.renderer.draw(scene);
     }
 
@@ -3359,7 +3457,13 @@ extern "C" fn step(view: *mut c_void) {
             signal_source,
             ..Default::default()
         });
-        window_state.lock().request_frame_callback = Some(callback);
+        let mut lock = window_state.lock();
+        lock.request_frame_callback = Some(callback);
+        let presented = mem::take(&mut lock.presented);
+        if lock.frame_demand.idle_after_frame(presented) {
+            lock.stop_display_link();
+            lock.frame_demand.parked.set(true);
+        }
     }
 }
 

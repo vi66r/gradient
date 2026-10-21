@@ -25,6 +25,8 @@ def main():
     binary = bundle / 'Contents/MacOS/browser'
     helper = args.output / 'perf-processes'
     subprocess.run(['clang','-O2','-Wall','-Wextra',str(ROOT/'scripts/perf-processes.c'),'-o',str(helper)],check=True)
+    visibility = args.output / 'window-visibility'
+    subprocess.run(['clang','-O2','-Wall','-Wextra',str(ROOT/'scripts/window-visibility.c'),'-framework','CoreGraphics','-framework','CoreFoundation','-o',str(visibility)],check=True)
     if processes(binary): raise SystemExit('Close this benchmark bundle before running it.')
     results = []
     for trial in range(1,args.trials+1):
@@ -58,17 +60,23 @@ def main():
                     for _ in range(21):
                         rows=json.loads(subprocess.check_output([str(helper),str(pid)],text=True))
                         if not rows: raise RuntimeError('No attributed processes')
-                        samples.append({'time':time.monotonic(),'processes':rows,'loadavg':os.getloadavg()})
+                        window=json.loads(subprocess.check_output([str(visibility),str(pid)],text=True))
+                        samples.append({'time':time.monotonic(),'processes':rows,'window':window,'loadavg':os.getloadavg()})
                         time.sleep(1)
                     bypid={}
-                    cpu_ns=0; wakeups=0
+                    cpu_ns=0; wakeups=0; app_wakeups=0
                     for sample in samples:
                         for row in sample['processes']:
                             old=bypid.get(row['pid'])
                             if old:
                                 cpu_ns+=max(0,row['cpu_ns']-old['cpu_ns'])
                                 wakeups+=max(0,row['wakeups']-old['wakeups'])
+                                if row['pid']==pid: app_wakeups+=max(0,row['wakeups']-old['wakeups'])
                             bypid[row['pid']]=row
+                    # Occluded windows stop GPUI's display link; such samples measure nothing useful.
+                    visible=min(s['window']['visible_fraction'] for s in samples)
+                    if visible < 0.9:
+                        raise RuntimeError(f'Window was not fully visible while sampling (min visible fraction {visible:.2f}); keep it uncovered on the current Space.')
                     elapsed=samples[-1]['time']-samples[0]['time']
                     memory=[sum(p['footprint'] for p in s['processes'])/2**20 for s in samples]
                     report=args.output/'reports'/f'{run}.json'
@@ -80,6 +88,7 @@ def main():
                         raise RuntimeError(f'Missing/invalid/hidden frame report: {frames}')
                     result={'run':run,'workload':workload,'trial':trial,'pid':pid,
                             'cpu_percent':cpu_ns/1e9/elapsed*100,'wakeups_per_second':wakeups/elapsed,
+                            'app_wakeups_per_second':app_wakeups/elapsed,'min_visible_fraction':visible,
                             'footprint_mib_median':statistics.median(memory),'footprint_mib_peak':max(memory),
                             'process_count':len(samples[-1]['processes']), 'frames':frames,'samples':samples}
                     results.append(result)

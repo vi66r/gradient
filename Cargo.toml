@@ -36,3 +36,7 @@ debug = 0
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Idle frame pacing for the macOS window backend; see vendor/README.md.
+[patch.crates-io]
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
