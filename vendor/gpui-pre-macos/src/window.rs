@@ -1816,13 +1816,19 @@ impl PlatformWindow for MacWindow {
         // focus (and therefore Space) defaults to Cancel, leaving the middle button of
         // prompts like "Save / Don't Save / Cancel" unreachable from the keyboard. Move
         // the initial focus onto the last non-cancel, non-default button instead.
-        let initial_focus_ix = answers
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, label)| !label.is_cancel())
-            .map(|(ix, _)| ix)
-            .filter(|&ix| ix > 0);
+        let initial_focus_ix = if answers.first().is_some_and(PromptButton::is_cancel) {
+            // A cancel-first confirmation deliberately makes cancellation the
+            // safe default, including Space when full keyboard access is on.
+            Some(0)
+        } else {
+            answers
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, label)| !label.is_cancel())
+                .map(|(ix, _)| ix)
+                .filter(|&ix| ix > 0)
+        };
 
         let alert = NSAlert::new(self.1);
         alert.setAlertStyle(match level {
@@ -1849,7 +1855,8 @@ impl PlatformWindow for MacWindow {
                     let key = NSString::from_str(&key.to_string());
                     button.setKeyEquivalent(&key);
                 }
-            } else if Some(ix) == initial_focus_ix {
+            }
+            if Some(ix) == initial_focus_ix {
                 initial_focus_button = Some(button);
             }
         }

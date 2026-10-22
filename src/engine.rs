@@ -6,6 +6,7 @@ use std::{cell::Cell, rc::Rc};
 
 #[derive(Debug)]
 pub enum Event {
+    QuitRequested,
     Title(u64, String),
     Loading(u64, bool, String),
     NewTab(u64, String),
@@ -440,3 +441,8 @@ mod linux {
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+mod termination;
+#[cfg(target_os = "macos")]
+pub use termination::TerminationGuard;

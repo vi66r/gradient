@@ -147,6 +147,7 @@ impl Browser {
                 "Navigation must stay within the shared origin"
             );
             page.raw.load_url(url)?;
+            tab.revision = tab.revision.wrapping_add(1);
             tab.loading = true;
             return Ok(Some(json!({"navigation_started":true})));
         }

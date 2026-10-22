@@ -4,6 +4,7 @@ mod assets;
 mod engine;
 mod favicon;
 mod http_client;
+mod lifecycle;
 mod mcp;
 mod model;
 mod session;
@@ -49,6 +50,7 @@ struct Tab {
     saved: SavedTab,
     private: bool,
     loading: bool,
+    revision: u64,
     page: Option<Rc<engine::Page>>,
     error: Option<String>,
     grant: Option<(String, u64)>,
@@ -76,6 +78,9 @@ struct Browser {
     notice: Option<String>,
     copy_feedback: Option<CopyTarget>,
     copy_epoch: u64,
+    discard_pending: bool,
+    #[cfg(target_os = "macos")]
+    termination: Option<engine::TerminationGuard>,
     lab: bool,
     request_method: String,
     request_url: Entity<InputState>,
@@ -162,6 +167,7 @@ impl Browser {
                 saved,
                 private: false,
                 loading: false,
+                revision: 0,
                 page: None,
                 error: None,
                 grant: None,
@@ -176,6 +182,7 @@ impl Browser {
                 },
                 private: false,
                 loading: false,
+                revision: 0,
                 page: None,
                 error: None,
                 grant: None,
@@ -199,6 +206,9 @@ impl Browser {
             notice,
             copy_feedback: None,
             copy_epoch: 0,
+            discard_pending: false,
+            #[cfg(target_os = "macos")]
+            termination: None,
             lab: false,
             request_method: "GET".into(),
             request_url,
@@ -313,6 +323,7 @@ impl Browser {
             cx,
         ) {
             Ok(page) => {
+                tab.revision = tab.revision.wrapping_add(1);
                 tab.page = Some(page);
                 tab.loading = true;
                 tab.error = None;
@@ -363,6 +374,7 @@ impl Browser {
                 },
                 private,
                 loading: false,
+                revision: 0,
                 page: None,
                 error: None,
                 grant: None,
@@ -375,10 +387,23 @@ impl Browser {
     }
 
     fn navigate(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
+        if url == START && self.tabs[self.active].page.is_some() {
+            self.request_discard(
+                lifecycle::Discard::Start(self.tabs[self.active].id),
+                window,
+                cx,
+            );
+            return;
+        }
+        self.navigate_unchecked(url, window, cx);
+    }
+
+    fn navigate_unchecked(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
         self.lab = false;
         self.notice = None;
         let tab = &mut self.tabs[self.active];
         tab.error = None;
+        tab.revision = tab.revision.wrapping_add(1);
         if tab
             .grant
             .as_ref()
@@ -412,6 +437,10 @@ impl Browser {
     }
 
     fn close(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.request_discard(lifecycle::Discard::Close(self.tabs[index].id), window, cx);
+    }
+
+    fn close_unchecked(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let tab = self.tabs.remove(index);
         if !tab.private {
             self.closed.push(tab.saved.clone());
@@ -491,7 +520,7 @@ impl Browser {
         .detach();
     }
 
-    fn save(&mut self) {
+    fn save(&mut self) -> bool {
         let active_id = self.tabs[self.active].id;
         let normal: Vec<_> = self.tabs.iter().filter(|tab| !tab.private).collect();
         let active = normal
@@ -505,12 +534,17 @@ impl Browser {
         };
         if let Err(error) = self.store.save(&snapshot) {
             self.notice = Some(format!("Session not saved: {error}"));
+            return false;
         }
         self.dirty = false;
+        true
     }
 
     fn event(&mut self, event: engine::Event, window: &mut Window, cx: &mut Context<Self>) {
         match event {
+            engine::Event::QuitRequested => {
+                self.request_discard(lifecycle::Discard::Quit, window, cx)
+            }
             engine::Event::Title(id, title) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
                     tab.saved.title = title;
@@ -519,6 +553,9 @@ impl Browser {
             }
             engine::Event::Loading(id, loading, url) => {
                 if let Some(index) = self.tabs.iter().position(|tab| tab.id == id) {
+                    if loading {
+                        self.tabs[index].revision = self.tabs[index].revision.wrapping_add(1);
+                    }
                     self.tabs[index].loading = loading;
                     if self.tabs[index]
                         .grant
@@ -666,24 +703,134 @@ impl Browser {
         cx.notify();
     }
     fn suspend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tabs[self.active].page.is_none() {
+        self.request_discard(
+            lifecycle::Discard::Suspend(self.tabs[self.active].id),
+            window,
+            cx,
+        );
+    }
+
+    fn live_pages(&self, action: lifecycle::Discard) -> Vec<lifecycle::LivePage> {
+        self.tabs
+            .iter()
+            .filter(|tab| action.includes(tab.id) && tab.page.is_some())
+            .map(|tab| lifecycle::LivePage {
+                id: tab.id,
+                revision: tab.revision,
+            })
+            .collect()
+    }
+
+    fn request_discard(
+        &mut self,
+        action: lifecycle::Discard,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Keyboard repeat, window close, and Dock Quit all share one decision.
+        if self.discard_pending {
             return;
         }
-        let id = self.tabs[self.active].id;
-        let answer=window.prompt(PromptLevel::Warning,"Suspend this tab?",Some("The page will reload when you resume it. Unsaved forms, calls, and other live page state will be lost."),&["Cancel","Suspend"],cx);
+        let expected = self.live_pages(action);
+        let lab_draft = action == lifecycle::Discard::Quit
+            && (self.requesting
+                || !self.request_url.read(cx).value().is_empty()
+                || !self.request_headers.read(cx).value().is_empty()
+                || !self.request_body.read(cx).value().is_empty());
+        if expected.is_empty() && !lab_draft {
+            self.discard(action, window, cx);
+            return;
+        }
+        self.discard_pending = true;
+        let (title, confirm, detail) = action.labels();
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            title,
+            Some(detail),
+            &["Cancel", confirm],
+            cx,
+        );
         cx.spawn_in(window, async move |this, cx| {
-            if answer.await == Ok(1) {
-                let _ = this.update_in(cx, |this, _, cx| {
-                    if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == id) {
-                        tab.page = None;
-                        tab.grant = None;
-                        tab.loading = false;
+            let confirmed = answer.await == Ok(1);
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.discard_pending = false;
+                if confirmed {
+                    if lifecycle::consent_matches(&expected, &this.live_pages(action)) {
+                        this.discard(action, window, cx);
+                    } else {
+                        this.notice = Some("The open pages changed while the dialog was open. Nothing was discarded; try again.".into());
                     }
-                    cx.notify();
-                });
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    fn discard(&mut self, action: lifecycle::Discard, window: &mut Window, cx: &mut Context<Self>) {
+        use lifecycle::Discard;
+        if action == Discard::Quit {
+            if !self.save() {
+                let expected = self.live_pages(action);
+                self.discard_pending = true;
+                let detail = format!(
+                    "{}\n\nQuit anyway? The current tab addresses will not be saved, and live page state and Request Lab drafts will be lost.",
+                    self.notice
+                        .as_deref()
+                        .unwrap_or("Session could not be saved.")
+                );
+                let answer = window.prompt(
+                    PromptLevel::Warning,
+                    "Quit without saving the session?",
+                    Some(&detail),
+                    &["Cancel", "Quit without saving"],
+                    cx,
+                );
+                cx.spawn_in(window, async move |this, cx| {
+                    let confirmed = answer.await == Ok(1);
+                    let _ = this.update_in(cx, |this, _, cx| {
+                        this.discard_pending = false;
+                        if confirmed
+                            && lifecycle::consent_matches(&expected, &this.live_pages(action))
+                        {
+                            this.finish_quit(cx);
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+                cx.notify();
+                return;
             }
-        })
-        .detach();
+            self.finish_quit(cx);
+            return;
+        }
+        let Some(index) = self.tabs.iter().position(|tab| action.includes(tab.id)) else {
+            return;
+        };
+        match action {
+            Discard::Close(_) => self.close_unchecked(index, window, cx),
+            Discard::Suspend(_) => {
+                let tab = &mut self.tabs[index];
+                tab.page = None;
+                tab.grant = None;
+                tab.loading = false;
+                tab.revision = tab.revision.wrapping_add(1);
+                cx.notify();
+            }
+            Discard::Start(_) => {
+                self.activate(index, window, cx);
+                self.navigate_unchecked(START.into(), window, cx);
+            }
+            Discard::Quit => unreachable!(),
+        }
+    }
+
+    fn finish_quit(&self, cx: &App) {
+        #[cfg(target_os = "macos")]
+        if let Some(guard) = &self.termination {
+            guard.allow();
+        }
+        cx.quit();
     }
     fn request(&self, cx: &App) -> http_client::Request {
         http_client::Request {
@@ -893,11 +1040,16 @@ fn main() -> anyhow::Result<()> {
         .detach();
         let weak = view.downgrade();
         let _ = handle.update(cx, |_, window, cx| {
-            window.on_window_should_close(cx, move |_, cx| {
-                let _ = weak.update(cx, |this, _| this.save());
-                cx.quit();
-                true
+            window.on_window_should_close(cx, move |window, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    this.request_discard(lifecycle::Discard::Quit, window, cx)
+                });
+                false
             });
+        });
+        #[cfg(target_os = "macos")]
+        view.update(cx, |this, _| {
+            this.termination = Some(engine::TerminationGuard::install(this.events.clone()));
         });
         cx.activate(true);
     });
