@@ -27,7 +27,7 @@ Normal app state lives in `~/Library/Application Support/RafiBrowser`. A profile
 - Normal tab/session recovery with atomic saves. Restored background tabs stay unloaded until selected. Live tabs retain their page state when switched away from.
 - Site icons in the sidebar. After a normal tab loads, the shell reads the page's declared icon, fetches it without cookies (256 KiB cap), and caches it per host in the profile's `icons/` folder for 7 days, keeping at most 500. Private tabs never fetch icons.
 - Private tabs use ephemeral engine storage, are omitted from saved sessions and recently closed tabs, and cannot be shared with agents.
-- Closing a live tab, returning it to the start screen, suspending it, and quitting ask before discarding page state. Cancel preserves the page; unloaded/blank tabs close immediately. Quit also checks for Request Lab drafts. On macOS, window-close and normal OS termination use the same guard. If saving the session fails, quitting requires a separate explicit choice.
+- On macOS, closing, suspending, returning to the start screen, quitting, and native navigation/reload/history check for edited forms, active media, and content that cannot be inspected. Clear pages proceed quietly; risky or unknown pages ask first. Cancel preserves the page. Quit also checks Request Lab drafts; session-write failures require a separate explicit choice. See the work-protection limits below.
 - Manual suspension under **Tools → Suspend Current Tab**. Resuming reloads the URL.
 - System WebKit's GPU rendering; the local WebGPU cube renders successfully on the tested Mac. No application-side screenshot or texture-copy pipeline.
 - Native **Request lab**: HTTP methods, custom headers and body, status/timing/size, formatted JSON responses, and cURL export. Requests run off the UI thread, have a 30-second timeout, and cap displayed responses at 2 MiB. Redirects are returned for inspection rather than automatically followed.
@@ -58,6 +58,8 @@ Click **Share tab with agent** inside Browser and confirm the specific origin. I
 
 Grants are in memory, scoped to a tab and exact origin (scheme/host/port), and revoked on explicit revocation, cross-origin navigation, suspension, closing, or app exit. Agent navigation is restricted to the granted origin. Action results are checked again before returning. A page click can still cause a consequential website action, so the agent must obtain the user's authorization for that action.
 
+`browser_navigate` acknowledges `navigation_requested`, not a completed load: a local confirmation may still be required. Mutation tools return an error while a page check or confirmation is pending; callers can retry after the user decides. Read access remains subject to the existing grant checks.
+
 The transport is a Unix socket with mode `0600` inside a `0700` profile directory, with bounded messages, concurrency, and request deadlines. There is no TCP listener or website-to-native command bridge. This restricts access to your OS account, **not to one particular agent client**: any process running as you can connect and access currently shared tabs. A local transport does not imply the model runs locally.
 
 ## Development checks
@@ -66,6 +68,8 @@ The transport is a Unix socket with mode `0600` inside a `0700` profile director
 cargo fmt --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
+# macOS: real WebKit checks in an ephemeral data store
+swift scripts/check-work-protection.swift
 python3 scripts/test-server.py --port 8765
 ```
 
@@ -95,6 +99,8 @@ The source selects GPUI's X11 backend and embeds WebKitGTK via Wry. XWayland is 
 
 This is a working first prototype, not a hardened daily-driver browser. Safari-level privacy and aggressive performance are acceptance targets, not achieved claims. It has no custom tracking/content blocker, privacy settings, full browser sandbox distribution, password manager, extensions, download manager, or camera/microphone permission UI. Site permission requests and downloads are denied for now. Network failures still need a complete error-page flow.
 
-Automatic tab eviction is intentionally not enabled until we can reliably protect unsaved forms, media, calls, and downloads. The discard guard conservatively warns for **every live page**, including private pages; it does not detect whether a site has unsaved work. Confirming discard still loses live forms, and reopening restores addresses only. Ordinary navigation, reload, history, crashes, and force quit are not protected by this guard. Complete browser-level before-unload support remains open: macOS WebKit exposes its close check and before-unload delegate in [private APIs](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/API/Cocoa/WKWebViewPrivate.h), which this app does not use. No form values are collected or persisted by the guard.
+Automatic tab eviction remains disabled. Work protection is a **heuristic, not the site's `beforeunload` contract**. On macOS an isolated [WKContentWorld](https://developer.apple.com/documentation/webkit/wkcontentworld) checks standard controls against their DOM defaults, observed rich-text edits, open shadow roots, same-origin frames, and playing HTML media. Resetting a form or updating its defaults after saving can clear its warning. Opaque frames, canvas/embed content, unavailable scripts, probe errors/timeouts, and exceeded scan limits warn conservatively. Probes run on demand, without background timers or a website-to-native message handler. Temporary field/editor comparisons remain inside the isolated JavaScript world; Rust receives only risk and revision metadata, and no draft values are persisted.
+
+Native navigation holds WebKit's original decision and request through the confirmation, preserving POST bodies, history, reloads, and redirects. Approval is checked against the page again before proceeding; new observed edits invalidate it. It cannot reliably infer arbitrary SPA save state, unobserved programmatic rich-text changes, JavaScript-only editors, closed shadow roots, Web Audio, calls, or all frame lifecycle changes. Crashes and force quit are not protected. Confirmed destruction still loses drafts; session recovery restores addresses only. No private WebKit APIs are used. Linux retains conservative shell discard warnings; this native navigation guard is macOS-only and Linux remains untested.
 
 The repeatable macOS regression suite measures optimized builds including attributed WebKit/Metal helpers; see [PERFORMANCE.md](PERFORMANCE.md). Safari comparisons, battery/energy measurements, and complex real-site workloads remain unverified.

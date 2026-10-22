@@ -130,6 +130,9 @@ impl Browser {
         });
         let address_events = cx.subscribe_in(&address, window, |this, input, event, window, cx| {
             // The resting field shows the host; focus swaps in the full URL.
+            if matches!(event, InputEvent::Focus) {
+                this.sync_address(window, cx);
+            }
             if matches!(event, InputEvent::Focus | InputEvent::Blur) {
                 cx.notify();
             }
@@ -248,6 +251,7 @@ impl Browser {
                 if this
                     .update_in(cx, |this, window, cx| {
                         if let Some(page) = &this.tabs[this.active].page
+                            && !page.navigation_pending()
                             && let Ok(url) = page.url()
                             && model::allowed_navigation(&url)
                             && url != "about:blank"
@@ -403,6 +407,18 @@ impl Browser {
         self.notice = None;
         let tab = &mut self.tabs[self.active];
         tab.error = None;
+        if url != START
+            && let Some(page) = &tab.page
+        {
+            if let Err(error) = page.raw.load_url(&url) {
+                tab.error = Some(error.to_string());
+            }
+            // Keep the committed address, title, and grant until WebKit commits.
+            // A canceled native navigation must not appear in session recovery.
+            window.focus(&self.focus, cx);
+            cx.notify();
+            return;
+        }
         tab.revision = tab.revision.wrapping_add(1);
         if tab
             .grant
@@ -479,6 +495,7 @@ impl Browser {
     }
 
     fn focus_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_address(window, cx);
         if let Some(page) = &self.tabs[self.active].page {
             let _ = page.raw.focus_parent();
         }
@@ -544,6 +561,44 @@ impl Browser {
         match event {
             engine::Event::QuitRequested => {
                 self.request_discard(lifecycle::Discard::Quit, window, cx)
+            }
+            engine::Event::NavigationDecision { id, reply } => {
+                if self.discard_pending
+                    || !self
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.id == id && tab.page.is_some())
+                {
+                    let _ = reply.try_send(false);
+                    return;
+                }
+                self.discard_pending = true;
+                let host = self
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .map(|tab| model::display_host(&tab.saved.url))
+                    .unwrap_or_default();
+                let detail = format!(
+                    "{host} may have unsaved edits, active media, or content Browser could not check. Leaving may discard that work."
+                );
+                let answer = window.prompt(
+                    PromptLevel::Warning,
+                    "Leave this page?",
+                    Some(&detail),
+                    &["Cancel", "Leave page"],
+                    cx,
+                );
+                cx.spawn_in(window, async move |this, cx| {
+                    let confirmed = answer.await == Ok(1);
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.discard_pending = false;
+                        this.sync_address(window, cx);
+                        let _ = reply.try_send(confirmed);
+                        cx.notify();
+                    });
+                })
+                .detach();
             }
             engine::Event::Title(id, title) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
@@ -676,11 +731,11 @@ impl Browser {
 
     fn history(&self, forward: bool) {
         if let Some(page) = &self.tabs[self.active].page {
-            let _ = page.raw.evaluate_script(if forward {
-                "history.forward()"
+            let _ = if forward {
+                page.raw.go_forward()
             } else {
-                "history.back()"
-            });
+                page.raw.go_back()
+            };
         }
     }
     fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -721,6 +776,29 @@ impl Browser {
             .collect()
     }
 
+    async fn check_work(
+        pages: &[(u64, Rc<engine::Page>)],
+        background: BackgroundExecutor,
+    ) -> Vec<(u64, lifecycle::WorkState)> {
+        futures_lite::future::race(
+            async {
+                let mut states = Vec::new();
+                for (id, page) in pages {
+                    states.push((*id, page.work_state(background.clone()).await));
+                }
+                states
+            },
+            async {
+                background.timer(Duration::from_secs(2)).await;
+                pages
+                    .iter()
+                    .map(|(id, _)| (*id, lifecycle::WorkState::unknown()))
+                    .collect()
+            },
+        )
+        .await
+    }
+
     fn request_discard(
         &mut self,
         action: lifecycle::Discard,
@@ -732,30 +810,45 @@ impl Browser {
             return;
         }
         let expected = self.live_pages(action);
-        let lab_draft = action == lifecycle::Discard::Quit
-            && (self.requesting
-                || !self.request_url.read(cx).value().is_empty()
-                || !self.request_headers.read(cx).value().is_empty()
-                || !self.request_body.read(cx).value().is_empty());
-        if expected.is_empty() && !lab_draft {
-            self.discard(action, window, cx);
-            return;
-        }
+        let pages: Vec<_> = self
+            .tabs
+            .iter()
+            .filter(|tab| action.includes(tab.id))
+            .filter_map(|tab| tab.page.as_ref().map(|page| (tab.id, page.clone())))
+            .collect();
         self.discard_pending = true;
-        let (title, confirm, detail) = action.labels();
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            title,
-            Some(detail),
-            &["Cancel", confirm],
-            cx,
-        );
+        let background = cx.background_executor().clone();
         cx.spawn_in(window, async move |this, cx| {
+            let states = Self::check_work(&pages, background.clone()).await;
+            let answer = this.update_in(cx, |this, window, cx| {
+                if !lifecycle::consent_matches(&expected, &this.live_pages(action)) {
+                    this.discard_pending = false;
+                    this.notice = Some("The open pages changed during the check. Nothing was discarded; try again.".into());
+                    cx.notify();
+                    return None;
+                }
+                let lab_draft = action == lifecycle::Discard::Quit
+                    && (this.requesting || !this.request_url.read(cx).value().is_empty()
+                        || !this.request_headers.read(cx).value().is_empty()
+                        || !this.request_body.read(cx).value().is_empty());
+                if states.iter().all(|(_, state)| state.clear()) && !lab_draft {
+                    this.discard_pending = false;
+                    this.discard(action, window, cx);
+                    return None;
+                }
+                let (title, confirm, detail) = action.labels();
+                Some(window.prompt(PromptLevel::Warning, title, Some(detail), &["Cancel", confirm], cx))
+            }).ok().flatten();
+            let Some(answer) = answer else { return; };
             let confirmed = answer.await == Ok(1);
+            let covered = if confirmed {
+                let current = Self::check_work(&pages, background).await;
+                states.iter().zip(&current).all(|((id, before), (current_id, after))| id == current_id && before.still_covered(after))
+            } else { true };
             let _ = this.update_in(cx, |this, window, cx| {
                 this.discard_pending = false;
                 if confirmed {
-                    if lifecycle::consent_matches(&expected, &this.live_pages(action)) {
+                    if covered && lifecycle::consent_matches(&expected, &this.live_pages(action)) {
                         this.discard(action, window, cx);
                     } else {
                         this.notice = Some("The open pages changed while the dialog was open. Nothing was discarded; try again.".into());

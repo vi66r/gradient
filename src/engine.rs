@@ -7,6 +7,10 @@ use std::{cell::Cell, rc::Rc};
 #[derive(Debug)]
 pub enum Event {
     QuitRequested,
+    NavigationDecision {
+        id: u64,
+        reply: Sender<bool>,
+    },
     Title(u64, String),
     Loading(u64, bool, String),
     NewTab(u64, String),
@@ -43,6 +47,8 @@ impl Drop for NativeHost {
 
 pub struct Page {
     pub raw: wry::WebView,
+    #[cfg(target_os = "macos")]
+    _protection: objc2::rc::Retained<protection::Protection>,
     visible: Cell<bool>,
     bounds: Cell<Bounds<Pixels>>,
     #[cfg(target_os = "macos")]
@@ -60,6 +66,17 @@ impl Drop for Page {
 }
 
 impl Page {
+    pub fn navigation_pending(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self._protection.navigation_pending()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
     pub fn create(
         options: PageOptions<'_>,
         web_context: &mut wry::WebContext,
@@ -73,13 +90,13 @@ impl Page {
             private,
             profile,
         } = options;
+        let protection_events = events.clone();
         let title_events = events.clone();
         let load_events = events.clone();
         let popup_events = events.clone();
         let navigation_events = events.clone();
         let permission_events = events.clone();
         let builder = wry::WebViewBuilder::new_with_web_context(web_context)
-            .with_url(url)
             .with_visible(false)
             .with_focused(false)
             .with_incognito(private)
@@ -128,8 +145,18 @@ impl Page {
             let _ = cx;
             builder.build_as_child(&*window)?
         };
+        #[cfg(target_os = "macos")]
+        let protection = {
+            use wry::WebViewExtMacOS;
+            protection::Protection::install(&raw.webview(), id, protection_events, cx)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let _ = protection_events;
+        raw.load_url(url)?;
         Ok(Rc::new(Self {
             raw,
+            #[cfg(target_os = "macos")]
+            _protection: protection,
             visible: Cell::new(false),
             bounds: Cell::new(Bounds::default()),
             #[cfg(target_os = "macos")]
@@ -139,6 +166,27 @@ impl Page {
             #[cfg(target_os = "macos")]
             host: std::cell::RefCell::new(None),
         }))
+    }
+
+    pub async fn work_state(
+        &self,
+        background: gpui::BackgroundExecutor,
+    ) -> crate::lifecycle::WorkState {
+        #[cfg(target_os = "macos")]
+        {
+            use wry::WebViewExtMacOS;
+            protection::assess(
+                objc2::rc::Retained::into_super(self.raw.webview()),
+                None,
+                background,
+            )
+            .await
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = background;
+            crate::lifecycle::WorkState::unknown()
+        }
     }
 
     /// WKWebView has no URL before its first navigation commits, including
@@ -446,3 +494,6 @@ mod linux {
 mod termination;
 #[cfg(target_os = "macos")]
 pub use termination::TerminationGuard;
+
+#[cfg(target_os = "macos")]
+mod protection;

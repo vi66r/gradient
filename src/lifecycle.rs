@@ -1,5 +1,34 @@
-//! Shell-owned destruction only. This deliberately does not pretend to detect
-//! unsaved work in arbitrary sites or implement WebKit's beforeunload contract.
+//! Work protection is a conservative heuristic, not the beforeunload contract.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct WorkState {
+    pub risk: u8,
+    pub stamp: String,
+}
+
+impl WorkState {
+    pub fn unknown() -> Self {
+        Self {
+            risk: 3,
+            stamp: String::new(),
+        }
+    }
+    pub fn clear(&self) -> bool {
+        self.risk == 0
+    }
+    pub fn parse(json: &str) -> Self {
+        if json.len() > 16384 {
+            return Self::unknown();
+        }
+        serde_json::from_str::<Self>(json)
+            .ok()
+            .filter(|state| state.risk <= 3 && !state.stamp.is_empty())
+            .unwrap_or_else(Self::unknown)
+    }
+    pub fn still_covered(&self, current: &Self) -> bool {
+        self == current
+            || (current.clear() && self.stamp.split(':').next() == current.stamp.split(':').next())
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Discard {
     Close(u64),
@@ -83,5 +112,29 @@ mod tests {
             assert!(!action.includes(8));
         }
         assert!(Discard::Quit.includes(8));
+    }
+
+    #[test]
+    fn invalid_or_missing_probe_results_are_never_clear() {
+        for json in [
+            "null",
+            "{}",
+            "",
+            r#"{"risk":0,"stamp":""}"#,
+            r#"{"risk":4,"stamp":"doc:0"}"#,
+        ] {
+            assert!(!WorkState::parse(json).clear());
+        }
+        assert!(!WorkState::parse(&"x".repeat(16385)).clear());
+    }
+
+    #[test]
+    fn consent_allows_saved_work_but_not_a_new_document_or_new_edits() {
+        let dirty = WorkState::parse(r#"{"risk":1,"stamp":"doc:1"}"#);
+        assert!(dirty.still_covered(&dirty));
+        assert!(dirty.still_covered(&WorkState::parse(r#"{"risk":0,"stamp":"doc:2"}"#)));
+        assert!(!dirty.still_covered(&WorkState::parse(r#"{"risk":1,"stamp":"doc:2"}"#)));
+        assert!(!dirty.still_covered(&WorkState::parse(r#"{"risk":0,"stamp":"other:1"}"#)));
+        assert!(!dirty.still_covered(&WorkState::unknown()));
     }
 }

@@ -3,17 +3,24 @@
 body{font:16px system-ui;margin:0;background:#fafbff;color:#283146}main{max-width:650px;margin:60px auto}h1{font-size:36px;font-weight:500}textarea{display:block;width:90%;min-height:120px;font:inherit;padding:16px;border:1px solid #bdc7dd;border-radius:8px}button,a{display:inline-block;margin:12px 12px 12px 0;padding:10px 14px}button{border:0;background:#456ae6;color:white;border-radius:8px}section{height:850px;padding-top:40px;border-top:1px solid #ddd}#count{font-weight:600}
 </style>
 <main><h1>Native shell. Real web.</h1><p id="address"></p>
-<label for="draft">A draft that should survive tab switching</label><textarea id="draft" placeholder="Type something here"></textarea>
+<form action="/api/form" method="post">
+<label for="draft">A draft that should survive tab switching</label><textarea id="draft" name="draft" placeholder="Type something here"></textarea>
+<button type="submit">Submit draft (POST fixture)</button><button type="reset">Reset draft</button>
+<button type="button" id="mark-saved">Mark draft saved (fixture)</button></form>
 <button id="increment">Increment counter</button><span id="count">0</span><br>
 <button id="delayed-navigation">Navigate in 5 seconds (discard race test)</button><br>
+<button id="delayed-edit">Change draft in 5 seconds (consent test)</button><br>
 <a href="/next">Next page</a><a href="/gpu">3D / WebGPU test</a><a href="/popup" target="_blank">Open a new tab</a>
+<a href="/redirect">Redirect test</a>
 <p id="storage"></p><section><h2>Scroll test</h2><p>Use the wheel or trackpad to reach the bottom.</p></section><h2 id="bottom">You reached the bottom.</h2></main>
 <script>
 document.querySelector('#address').textContent=location.href;
 let count=0;document.querySelector('#increment').onclick=()=>document.querySelector('#count').textContent=++count;
 document.querySelector('#delayed-navigation').onclick=()=>setTimeout(()=>location.assign('/next'),5000);
+document.querySelector('#delayed-edit').onclick=()=>setTimeout(()=>document.querySelector('#draft').value='Changed while deciding',5000);
 localStorage.setItem('fixtureVisits', Number(localStorage.getItem('fixtureVisits')||0)+1);
 document.querySelector('#storage').textContent='Visits in this website data store: '+localStorage.getItem('fixtureVisits');
 document.querySelector('#draft').addEventListener('input',()=>window.hasUnsavedDraft=true);
+document.querySelector('#mark-saved').onclick=()=>{const draft=document.querySelector('#draft');draft.defaultValue=draft.value;window.hasUnsavedDraft=false;};
 window.addEventListener('beforeunload',event=>{if(window.hasUnsavedDraft){event.preventDefault();event.returnValue='';}});
 </script>

@@ -14,6 +14,11 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", "/next")
+            self.end_headers()
+            return
         if self.path.split("?")[0] == "/performance.js":
             content = (ROOT / "performance.js").read_bytes()
             self.send_response(200)

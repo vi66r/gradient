@@ -135,6 +135,11 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Tab is suspended"))?;
         anyhow::ensure!(
+            command.name == "browser_read_page"
+                || (!self.discard_pending && !page.navigation_pending()),
+            "Wait for the browser's pending page check or confirmation"
+        );
+        anyhow::ensure!(
             mcp::origin(&page.url()?).as_ref() == Some(&origin),
             "Tab changed origin"
         );
@@ -148,8 +153,9 @@ impl Browser {
             );
             page.raw.load_url(url)?;
             tab.revision = tab.revision.wrapping_add(1);
-            tab.loading = true;
-            return Ok(Some(json!({"navigation_started":true})));
+            return Ok(Some(
+                json!({"navigation_requested":true,"confirmation_may_be_required":true}),
+            ));
         }
         let script = mcp::script(&command.name, args, &origin)?;
         let events = self.events.clone();
