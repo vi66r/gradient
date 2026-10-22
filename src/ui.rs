@@ -237,6 +237,7 @@ impl Browser {
             .into_any_element()
         };
         let group: SharedString = format!("tab-{}", tab.id).into();
+        let id = tab.id;
         div()
             .id(("tab", tab.id))
             .group(group.clone())
@@ -288,6 +289,14 @@ impl Browser {
                     })),
             )
             .on_click(cx.listener(move |this, _, w, cx| this.activate(index, w, cx)))
+            // Acts on this tab without switching to it, as in Safari.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.tab_menu(id, event.position, window, cx);
+                }),
+            )
             // New tabs ease in once; restored tabs settle with them at launch.
             .with_animation(
                 ("tab-enter", tab.id),
@@ -811,6 +820,7 @@ impl Render for Browser {
                 }),
             )
             .on_action(cx.listener(|this, _: &CopyUrl, _, cx| this.copy_url(cx)))
+            .on_action(cx.listener(|this, action: &TabMenu, w, cx| this.tab_command(action, w, cx)))
             .on_action(cx.listener(|this, _: &Back, _, _| this.history(false)))
             .on_action(cx.listener(|this, _: &Forward, _, _| this.history(true)))
             .on_action(cx.listener(|this, _: &Reload, w, cx| this.reload(w, cx)))

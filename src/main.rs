@@ -56,6 +56,28 @@ struct Tab {
     grant: Option<(String, u64)>,
 }
 
+/// Commands from a tab's context menu. They carry the tab's ID because the
+/// menu acts on the tab that was right-clicked, not the active one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+enum TabCommand {
+    Reload,
+    CopyAddress,
+    Duplicate,
+    Suspend,
+    Resume,
+    ToggleAgent,
+    Close,
+    CloseOthers,
+    CloseBelow,
+}
+
+#[derive(Clone, PartialEq, serde::Deserialize, Action)]
+#[action(namespace = browser, no_json)]
+struct TabMenu {
+    id: u64,
+    command: TabCommand,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CopyTarget {
     Address,
@@ -357,6 +379,17 @@ impl Browser {
     }
 
     fn new_tab(&mut self, url: String, private: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_tab_at(0, url, private, window, cx);
+    }
+
+    fn new_tab_at(
+        &mut self,
+        position: usize,
+        url: String,
+        private: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.tabs.len() >= 1000 {
             self.notice = Some("Tab limit reached.".into());
             return;
@@ -364,8 +397,9 @@ impl Browser {
         let id = self.next_id;
         self.next_id += 1;
         // Newest first: the sidebar reads top-down from what you just opened.
+        let position = position.min(self.tabs.len());
         self.tabs.insert(
-            0,
+            position,
             Tab {
                 id,
                 saved: SavedTab {
@@ -384,7 +418,7 @@ impl Browser {
                 grant: None,
             },
         );
-        self.activate(0, window, cx);
+        self.activate(position, window, cx);
         if self.tabs[self.active].saved.url == START {
             self.focus_address(window, cx);
         }
@@ -456,13 +490,44 @@ impl Browser {
         self.request_discard(lifecycle::Discard::Close(self.tabs[index].id), window, cx);
     }
 
+    fn remember_closed(&mut self, saved: SavedTab) {
+        self.closed.push(saved);
+        if self.closed.len() > 20 {
+            self.closed.remove(0);
+        }
+    }
+
+    /// Removes `ids` in one step so the survivors aren't activated (and their
+    /// pages loaded) one by one. The menu's own tab takes over if needed.
+    fn close_tabs_unchecked(
+        &mut self,
+        keep: u64,
+        ids: &[u64],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let active = self.tabs[self.active].id;
+        let active = if ids.contains(&active) { keep } else { active };
+        let (closing, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.tabs)
+            .into_iter()
+            .partition(|tab| ids.contains(&tab.id));
+        self.tabs = kept;
+        // Reopen restores the topmost (newest) of them first.
+        for tab in closing.into_iter().rev().filter(|tab| !tab.private) {
+            self.remember_closed(tab.saved);
+        }
+        match self.tabs.iter().position(|tab| tab.id == active) {
+            Some(index) => self.activate(index, window, cx),
+            None if self.tabs.is_empty() => self.new_tab(START.into(), false, window, cx),
+            None => self.activate(0, window, cx),
+        }
+        self.save();
+    }
+
     fn close_unchecked(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let tab = self.tabs.remove(index);
         if !tab.private {
-            self.closed.push(tab.saved.clone());
-            if self.closed.len() > 20 {
-                self.closed.remove(0);
-            }
+            self.remember_closed(tab.saved.clone());
         }
         drop(tab);
         if self.tabs.is_empty() {
@@ -505,14 +570,112 @@ impl Browser {
         });
     }
 
-    fn copy_url(&mut self, cx: &mut Context<Self>) {
-        let tab = &self.tabs[self.active];
-        let url = tab
-            .page
+    fn tab_menu(&self, id: u64, position: Point<Pixels>, window: &mut Window, cx: &mut App) {
+        use TabCommand::*;
+        use gpui::component::native_menu::NativeMenu;
+        let Some(index) = self.tabs.iter().position(|tab| tab.id == id) else {
+            return;
+        };
+        let tab = &self.tabs[index];
+        let item = |command| Box::new(TabMenu { id, command }) as Box<dyn Action>;
+        let live = tab.page.is_some();
+        let addressed = tab.saved.url != START;
+        let mut menu = NativeMenu::new();
+        if live {
+            menu = menu.menu("Reload", item(Reload));
+        }
+        menu = menu
+            .menu_with_disabled("Copy Address", !addressed, item(CopyAddress))
+            .menu("Duplicate Tab", item(Duplicate))
+            .separator();
+        menu = if live {
+            menu.menu("Suspend Tab", item(Suspend))
+        } else {
+            menu.menu_with_disabled("Resume Tab", !addressed, item(Resume))
+        };
+        if !tab.private {
+            menu = match tab.grant {
+                Some(_) => menu.menu("Revoke Agent Access", item(ToggleAgent)),
+                None => menu.menu_with_disabled("Share with Agent", !live, item(ToggleAgent)),
+            };
+        }
+        menu.separator()
+            .menu("Close Tab", item(Close))
+            .menu_with_disabled("Close Other Tabs", self.tabs.len() < 2, item(CloseOthers))
+            .menu_with_disabled(
+                "Close Tabs Below",
+                index + 1 >= self.tabs.len(),
+                item(CloseBelow),
+            )
+            .show(position, window, cx);
+    }
+
+    fn tab_command(&mut self, action: &TabMenu, window: &mut Window, cx: &mut Context<Self>) {
+        use TabCommand::*;
+        // The menu was built for a tab that may have moved or closed since.
+        let Some(index) = self.tabs.iter().position(|tab| tab.id == action.id) else {
+            return;
+        };
+        let id = action.id;
+        match action.command {
+            Reload => {
+                if let Some(page) = &self.tabs[index].page {
+                    let _ = page.raw.reload();
+                }
+            }
+            CopyAddress => {
+                let url = self.tab_url(index);
+                if url != START {
+                    cx.write_to_clipboard(ClipboardItem::new_string(url));
+                    if index == self.active && !self.lab {
+                        self.flash_copy(CopyTarget::Address, cx);
+                    }
+                }
+            }
+            Duplicate => {
+                let (url, private) = (self.tab_url(index), self.tabs[index].private);
+                // Directly above the original, which is where "newer" lives.
+                self.new_tab_at(index, url, private, window, cx);
+            }
+            Suspend => self.request_discard(lifecycle::Discard::Suspend(id), window, cx),
+            Resume => self.ensure_page(index, window, cx),
+            ToggleAgent => self.toggle_agent_for(index, window, cx),
+            Close => self.close(index, window, cx),
+            CloseOthers | CloseBelow => {
+                let ids: Vec<u64> = self
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| match action.command {
+                        CloseBelow => *i > index,
+                        _ => *i != index,
+                    })
+                    .map(|(_, tab)| tab.id)
+                    .collect();
+                if !ids.is_empty() {
+                    self.request_discard(
+                        lifecycle::Discard::CloseTabs { keep: id, ids },
+                        window,
+                        cx,
+                    );
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// The live address when the page has one, else the saved address.
+    fn tab_url(&self, index: usize) -> String {
+        let tab = &self.tabs[index];
+        tab.page
             .as_ref()
             .and_then(|page| page.url().ok())
             .filter(|url| model::allowed_navigation(url))
-            .unwrap_or_else(|| tab.saved.url.clone());
+            .unwrap_or_else(|| tab.saved.url.clone())
+    }
+
+    fn copy_url(&mut self, cx: &mut Context<Self>) {
+        let url = self.tab_url(self.active);
         cx.write_to_clipboard(ClipboardItem::new_string(url));
         self.flash_copy(CopyTarget::Address, cx);
     }
@@ -765,7 +928,7 @@ impl Browser {
         );
     }
 
-    fn live_pages(&self, action: lifecycle::Discard) -> Vec<lifecycle::LivePage> {
+    fn live_pages(&self, action: &lifecycle::Discard) -> Vec<lifecycle::LivePage> {
         self.tabs
             .iter()
             .filter(|tab| action.includes(tab.id) && tab.page.is_some())
@@ -809,7 +972,7 @@ impl Browser {
         if self.discard_pending {
             return;
         }
-        let expected = self.live_pages(action);
+        let expected = self.live_pages(&action);
         let pages: Vec<_> = self
             .tabs
             .iter()
@@ -821,7 +984,7 @@ impl Browser {
         cx.spawn_in(window, async move |this, cx| {
             let states = Self::check_work(&pages, background.clone()).await;
             let answer = this.update_in(cx, |this, window, cx| {
-                if !lifecycle::consent_matches(&expected, &this.live_pages(action)) {
+                if !lifecycle::consent_matches(&expected, &this.live_pages(&action)) {
                     this.discard_pending = false;
                     this.notice = Some("The open pages changed during the check. Nothing was discarded; try again.".into());
                     cx.notify();
@@ -833,7 +996,7 @@ impl Browser {
                         || !this.request_body.read(cx).value().is_empty());
                 if states.iter().all(|(_, state)| state.clear()) && !lab_draft {
                     this.discard_pending = false;
-                    this.discard(action, window, cx);
+                    this.discard(action.clone(), window, cx);
                     return None;
                 }
                 let (title, confirm, detail) = action.labels();
@@ -848,7 +1011,7 @@ impl Browser {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.discard_pending = false;
                 if confirmed {
-                    if covered && lifecycle::consent_matches(&expected, &this.live_pages(action)) {
+                    if covered && lifecycle::consent_matches(&expected, &this.live_pages(&action)) {
                         this.discard(action, window, cx);
                     } else {
                         this.notice = Some("The open pages changed while the dialog was open. Nothing was discarded; try again.".into());
@@ -863,7 +1026,7 @@ impl Browser {
         use lifecycle::Discard;
         if action == Discard::Quit {
             if !self.save() {
-                let expected = self.live_pages(action);
+                let expected = self.live_pages(&action);
                 self.discard_pending = true;
                 let detail = format!(
                     "{}\n\nQuit anyway? The current tab addresses will not be saved, and live page state and Request Lab drafts will be lost.",
@@ -883,7 +1046,7 @@ impl Browser {
                     let _ = this.update_in(cx, |this, _, cx| {
                         this.discard_pending = false;
                         if confirmed
-                            && lifecycle::consent_matches(&expected, &this.live_pages(action))
+                            && lifecycle::consent_matches(&expected, &this.live_pages(&action))
                         {
                             this.finish_quit(cx);
                         }
@@ -895,6 +1058,10 @@ impl Browser {
                 return;
             }
             self.finish_quit(cx);
+            return;
+        }
+        if let Discard::CloseTabs { keep, ids } = &action {
+            self.close_tabs_unchecked(*keep, ids, window, cx);
             return;
         }
         let Some(index) = self.tabs.iter().position(|tab| action.includes(tab.id)) else {
@@ -914,7 +1081,7 @@ impl Browser {
                 self.activate(index, window, cx);
                 self.navigate_unchecked(START.into(), window, cx);
             }
-            Discard::Quit => unreachable!(),
+            Discard::Quit | Discard::CloseTabs { .. } => unreachable!(),
         }
     }
 

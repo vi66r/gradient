@@ -5,7 +5,16 @@ use std::time::Instant;
 
 impl Browser {
     pub(crate) fn toggle_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tab = &mut self.tabs[self.active];
+        self.toggle_agent_for(self.active, window, cx);
+    }
+
+    pub(crate) fn toggle_agent_for(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = &mut self.tabs[index];
         if tab.grant.take().is_some() {
             self.notice = Some("Agent access revoked.".into());
             cx.notify();

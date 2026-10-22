@@ -29,9 +29,15 @@ impl WorkState {
             || (current.clear() && self.stamp.split(':').next() == current.stamp.split(':').next())
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Discard {
     Close(u64),
+    /// Bulk close from a tab's menu. `keep` is the tab the menu belongs to; it
+    /// becomes active if the active tab is among those closed.
+    CloseTabs {
+        keep: u64,
+        ids: Vec<u64>,
+    },
     Suspend(u64),
     Start(u64),
     Quit,
@@ -44,15 +50,21 @@ pub struct LivePage {
 }
 
 impl Discard {
-    pub fn includes(self, id: u64) -> bool {
+    pub fn includes(&self, id: u64) -> bool {
         match self {
-            Self::Close(target) | Self::Suspend(target) | Self::Start(target) => target == id,
+            Self::Close(target) | Self::Suspend(target) | Self::Start(target) => *target == id,
+            Self::CloseTabs { ids, .. } => ids.contains(&id),
             Self::Quit => true,
         }
     }
 
-    pub fn labels(self) -> (&'static str, &'static str, &'static str) {
+    pub fn labels(&self) -> (&'static str, &'static str, &'static str) {
         match self {
+            Self::CloseTabs { .. } => (
+                "Close these tabs?",
+                "Close tabs",
+                "Unsaved forms, calls, and other live page state in these tabs will be lost. Reopening restores addresses only. Private tabs cannot be reopened.",
+            ),
             Self::Close(_) => (
                 "Close this tab?",
                 "Close tab",
@@ -112,6 +124,12 @@ mod tests {
             assert!(!action.includes(8));
         }
         assert!(Discard::Quit.includes(8));
+        let bulk = Discard::CloseTabs {
+            keep: 1,
+            ids: vec![2, 3],
+        };
+        assert!(bulk.includes(2) && bulk.includes(3));
+        assert!(!bulk.includes(1) && !bulk.includes(4));
     }
 
     #[test]
