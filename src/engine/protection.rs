@@ -13,8 +13,9 @@ use objc2_web_kit::{
 };
 use std::{
     cell::{Cell, RefCell},
+    path::{Path, PathBuf},
     rc::Rc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 fn world() -> Retained<WKContentWorld> {
@@ -66,10 +67,45 @@ pub async fn assess(
     .await
 }
 
+/// Files the user just dropped on this page. If the page doesn't take the drop
+/// itself, WebKit loads the file in place; that load opens new tabs instead.
+#[derive(Clone, Default)]
+pub struct Dropped(Rc<RefCell<Option<DroppedPaths>>>);
+
+type DroppedPaths = (Instant, Vec<PathBuf>);
+
+impl Dropped {
+    pub fn record(&self, paths: Vec<PathBuf>) {
+        *self.0.borrow_mut() = (!paths.is_empty()).then(|| (Instant::now(), paths));
+    }
+
+    fn take_matching(&self, path: &Path) -> Option<Vec<PathBuf>> {
+        let mut slot = self.0.borrow_mut();
+        let (at, paths) = slot.as_ref()?;
+        if at.elapsed() > Duration::from_secs(10) || !paths.iter().any(|dropped| dropped == path) {
+            return None;
+        }
+        slot.take().map(|(_, paths)| paths)
+    }
+}
+
+/// What a page's navigation delegate needs from `Page::create`.
+pub struct Policy {
+    pub id: u64,
+    pub events: Sender<Event>,
+    pub file_gate: super::FileGate,
+    pub dropped: Dropped,
+}
+
 pub struct Ivars {
     original: Retained<ProtocolObject<dyn WKNavigationDelegate>>,
     id: u64,
     events: Sender<Event>,
+    file_gate: super::FileGate,
+    dropped: Dropped,
+    /// The local file Browser itself is loading (address field, drop, open
+    /// panel, restore); its main-frame decision is Browser's, not the page's.
+    file: RefCell<Option<PathBuf>>,
     foreground: gpui::ForegroundExecutor,
     background: gpui::BackgroundExecutor,
     busy: Rc<Cell<bool>>,
@@ -139,6 +175,38 @@ define_class!(
             // machinery: srcdoc, blob and data frames. Top-level data: stays
             // blocked, as in other browsers. Downloads keep Wry's policy.
             let scheme = target_url.as_deref().and_then(|url| url.split_once(':')).map(|(scheme, _)| scheme.to_ascii_lowercase());
+            // Local files: Browser may load them (and replay them through its
+            // own Back/Forward/Reload), and a local page may link to another.
+            // A web page may never navigate to or open one, in any frame.
+            let file = scheme.as_deref() == Some("file");
+            if file {
+                let target = target_url.clone().unwrap_or_default();
+                let path = crate::model::file_path(&target);
+                let expected = main && path.is_some() && {
+                    let mut expected = state.file.borrow_mut();
+                    let matches = *expected == path;
+                    if matches { expected.take(); }
+                    matches
+                };
+                let history = kind == WKNavigationType::BackForward || kind == WKNavigationType::Reload;
+                // `sourceFrame` is declared nonnull but is nil for some
+                // app-initiated loads; read it as nullable.
+                let source: Option<Retained<WKFrameInfo>> = unsafe { msg_send![action, sourceFrame] };
+                let source_url = source.and_then(|frame| unsafe { frame.request().URL() }).and_then(|url| url.absoluteString()).map(|url| url.to_string());
+                if main && !expected && !history
+                    && let Some(paths) = path.as_deref().and_then(|path| state.dropped.take_matching(path))
+                {
+                    handler.call((WKNavigationActionPolicy::Cancel,));
+                    let urls = paths.iter().filter_map(|path| crate::model::file_url_from_path(path).ok()).collect();
+                    let _ = state.events.try_send(Event::OpenFiles(state.id, urls));
+                    return;
+                }
+                if !crate::model::file_navigation_allowed(&target, expected || history, source_url.as_deref()) {
+                    handler.call((WKNavigationActionPolicy::Cancel,));
+                    let _ = state.events.try_send(Event::Notice("Web pages can’t open files on this computer.".into()));
+                    return;
+                }
+            }
             let embedded = frame.is_some() && !main && matches!(scheme.as_deref(), Some("about" | "blob" | "data"));
             let download = action.respondsToSelector(objc2::sel!(shouldPerformDownload)) && unsafe { action.shouldPerformDownload() };
             if embedded && !download {
@@ -146,6 +214,7 @@ define_class!(
                 return;
             }
             if !main || !browser || initial || frame_url.as_deref() == Some("about:blank") || same_document {
+                if file { state.file_gate.set(true); }
                 unsafe { state.original.webView_decidePolicyForNavigationAction_decisionHandler(view, action, handler); }
                 return;
             }
@@ -155,6 +224,7 @@ define_class!(
             let mut decision = Decision(Some(handler.copy()));
             let (events, id, background) = (state.events.clone(), state.id, state.background.clone());
             let approved = state.approved.clone();
+            let file_gate = file.then(|| state.file_gate.clone());
             state.foreground.spawn(async move {
                 let _busy = busy;
                 let before = assess(view.clone(), frame.clone(), background.clone()).await;
@@ -172,6 +242,7 @@ define_class!(
                 }
                 // Forward the ORIGINAL action and decision, preserving POST
                 // bodies, history entries, reload semantics, and Wry policy.
+                if let Some(gate) = file_gate { gate.set(true); }
                 unsafe { original.webView_decidePolicyForNavigationAction_decisionHandler(&view, &action, &decision.take()); }
             }).detach();
         }
@@ -215,12 +286,17 @@ impl Protection {
         self.ivars().shell.set(true);
     }
 
-    pub fn install(
-        view: &WKWebView,
-        id: u64,
-        events: Sender<Event>,
-        cx: &gpui::App,
-    ) -> Retained<Self> {
+    pub fn expect_file_navigation(&self, path: PathBuf) {
+        *self.ivars().file.borrow_mut() = Some(path);
+    }
+
+    pub fn install(view: &WKWebView, policy: Policy, cx: &gpui::App) -> Retained<Self> {
+        let Policy {
+            id,
+            events,
+            file_gate,
+            dropped,
+        } = policy;
         let mtm = MainThreadMarker::new().unwrap();
         unsafe {
             let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
@@ -239,6 +315,9 @@ impl Protection {
                     .expect("Wry installs a navigation delegate"),
                 id,
                 events,
+                file_gate,
+                dropped,
+                file: RefCell::new(None),
                 foreground: cx.foreground_executor().clone(),
                 background: cx.background_executor().clone(),
                 busy: Rc::new(Cell::new(false)),

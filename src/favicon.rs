@@ -245,6 +245,8 @@ mod tests {
             Some("127.0.0.1:8766")
         );
         assert!(host_key("about:blank").is_none());
+        // Local files never fetch icons.
+        assert!(host_key("file:///tmp/page.html").is_none());
         let cache = DiskCache::new(Path::new("/tmp/profile"));
         assert_eq!(
             cache.path("127.0.0.1:8766"),

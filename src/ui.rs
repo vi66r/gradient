@@ -231,6 +231,8 @@ impl Browser {
                 IconName::Lock
             } else if tab.page.is_none() && tab.saved.url != START {
                 IconName::Moon
+            } else if model::is_file_url(&tab.saved.url) {
+                IconName::FileText
             } else {
                 IconName::Globe
             })
@@ -443,6 +445,8 @@ impl Browser {
                         IconName::Lock
                     } else if secure {
                         IconName::LockKeyhole
+                    } else if model::is_file_url(url) {
+                        IconName::FileText
                     } else {
                         IconName::Globe
                     },
@@ -900,6 +904,12 @@ impl Render for Browser {
                     this.new_tab(START.into(), true, w, cx)
                 }),
             )
+            .on_action(cx.listener(|this, _: &OpenFile, w, cx| this.prompt_open_file(w, cx)))
+            // Files dropped on the shell (sidebar, start or resting page). The
+            // native page takes its own drops; see `engine::Page::create`.
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, w, cx| {
+                this.open_paths(paths.paths(), false, w, cx)
+            }))
             .on_action(cx.listener(|this, _: &CloseTab, w, cx| this.close(this.active, w, cx)))
             .on_action(cx.listener(|this, _: &ReopenTab, w, cx| {
                 if let Some(tab) = this.closed.pop() {
@@ -991,8 +1001,12 @@ impl Render for Browser {
     }
 }
 
-/// Host and port for the resting address field; the full URL appears on focus.
+/// Host and port (or a local file's name) for the resting address field; the
+/// full URL appears on focus.
 fn address_label(url: &str) -> String {
+    if let Some(name) = model::file_name(url) {
+        return name;
+    }
     url::Url::parse(url)
         .ok()
         .and_then(|parsed| {

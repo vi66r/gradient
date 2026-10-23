@@ -28,6 +28,7 @@ actions!(
     [
         NewTab,
         NewPrivateTab,
+        OpenFile,
         CloseTab,
         ReopenTab,
         FocusAddress,
@@ -292,7 +293,7 @@ impl Browser {
                         if let Some(page) = &this.tabs[this.active].page
                             && !page.navigation_pending()
                             && let Ok(url) = page.url()
-                            && model::allowed_navigation(&url)
+                            && model::allowed_address(&url)
                             && url != "about:blank"
                             && url != this.tabs[this.active].saved.url
                         {
@@ -308,7 +309,11 @@ impl Browser {
                                 tab.page = None;
                                 tab.loading = false;
                                 tab.grant = None;
-                                tab.error = Some("The page could not be reached. Check the address and your connection. For a localhost page, make sure its development server is running, then try again.".into());
+                                tab.error = Some(if model::is_file_url(&tab.saved.url) {
+                                    "This file couldn’t be opened. Check that it still exists and that you can read it, then try again.".into()
+                                } else {
+                                    "The page could not be reached. Check the address and your connection. For a localhost page, make sure its development server is running, then try again.".into()
+                                });
                                 cx.notify();
                             }
                         }
@@ -351,6 +356,14 @@ impl Browser {
     fn ensure_page(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[index];
         if tab.saved.url == START || tab.page.is_some() {
+            return;
+        }
+        // A restored file may have moved since; rest with Try again.
+        if model::is_file_url(&tab.saved.url)
+            && let Some(problem) = model::file_problem(&tab.saved.url)
+        {
+            tab.error = Some(problem);
+            tab.loading = false;
             return;
         }
         match engine::Page::create(
@@ -455,6 +468,15 @@ impl Browser {
     }
 
     fn navigate_unchecked(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
+        // Keep the current page when a typed path names nothing showable.
+        if model::is_file_url(&url)
+            && self.tabs[self.active].page.is_some()
+            && let Some(problem) = model::file_problem(&url)
+        {
+            self.notice = Some(problem);
+            cx.notify();
+            return;
+        }
         self.lab = false;
         self.notice = None;
         let tab = &mut self.tabs[self.active];
@@ -502,6 +524,58 @@ impl Browser {
         }
         self.dirty = true;
         cx.notify();
+    }
+
+    /// Opens local files (drop, open panel) as new tabs. The first one ends up
+    /// on top and selected, matching the order they were chosen in.
+    fn open_paths(
+        &mut self,
+        paths: &[std::path::PathBuf],
+        private: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (folders, files): (Vec<_>, Vec<_>) = paths.iter().partition(|path| path.is_dir());
+        let urls = files
+            .into_iter()
+            .filter_map(|path| model::file_url_from_path(path).ok())
+            .collect();
+        self.open_files(urls, private, window, cx);
+        if !folders.is_empty() {
+            self.notice = Some("Browser can’t show folders. Open a file instead.".into());
+        }
+        cx.notify();
+    }
+
+    fn open_files(
+        &mut self,
+        urls: Vec<String>,
+        private: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for url in urls.into_iter().rev() {
+            if model::is_file_url(&url) {
+                self.new_tab(url, private, window, cx);
+            }
+        }
+    }
+
+    fn prompt_open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let chosen = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Open".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = chosen.await {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.open_paths(&paths, false, window, cx)
+                });
+            }
+        })
+        .detach();
     }
 
     fn close(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -598,6 +672,7 @@ impl Browser {
         let item = |command| Box::new(TabMenu { id, command }) as Box<dyn Action>;
         let live = tab.page.is_some();
         let addressed = tab.saved.url != START;
+        let local = model::is_file_url(&tab.saved.url);
         let mut menu = NativeMenu::new();
         if live {
             menu = menu.menu("Reload", item(Reload));
@@ -614,7 +689,9 @@ impl Browser {
         if !tab.private {
             menu = match tab.grant {
                 Some(_) => menu.menu("Revoke Agent Access", item(ToggleAgent)),
-                None => menu.menu_with_disabled("Share with Agent", !live, item(ToggleAgent)),
+                None => {
+                    menu.menu_with_disabled("Share with Agent", !live || local, item(ToggleAgent))
+                }
             };
         }
         menu.separator()
@@ -795,7 +872,7 @@ impl Browser {
         tab.page
             .as_ref()
             .and_then(|page| page.url().ok())
-            .filter(|url| model::allowed_navigation(url))
+            .filter(|url| model::allowed_address(url))
             .unwrap_or_else(|| tab.saved.url.clone())
     }
 
@@ -921,7 +998,7 @@ impl Browser {
                     {
                         self.tabs[index].grant = None;
                     }
-                    if model::allowed_navigation(&url) && url != "about:blank" {
+                    if model::allowed_address(&url) && url != "about:blank" {
                         self.tabs[index].saved.url = url;
                         self.dirty = true;
                     }
@@ -938,6 +1015,11 @@ impl Browser {
             engine::Event::NewTab(id, url) => {
                 if let Some(tab) = self.tabs.iter().find(|tab| tab.id == id) {
                     self.new_tab(url, tab.private, window, cx);
+                }
+            }
+            engine::Event::OpenFiles(id, urls) => {
+                if let Some(tab) = self.tabs.iter().find(|tab| tab.id == id) {
+                    self.open_files(urls, tab.private, window, cx);
                 }
             }
             engine::Event::Notice(message) => self.notice = Some(message),
@@ -1336,6 +1418,7 @@ fn main() -> anyhow::Result<()> {
         cx.bind_keys([
             KeyBinding::new(&format!("{modifier}-t"), NewTab, None),
             KeyBinding::new(&format!("{modifier}-shift-n"), NewPrivateTab, None),
+            KeyBinding::new(&format!("{modifier}-o"), OpenFile, None),
             KeyBinding::new(&format!("{modifier}-w"), CloseTab, None),
             KeyBinding::new(&format!("{modifier}-shift-t"), ReopenTab, None),
             KeyBinding::new(&format!("{modifier}-l"), FocusAddress, None),
@@ -1354,6 +1437,7 @@ fn main() -> anyhow::Result<()> {
             Menu::new("File").items([
                 MenuItem::action("New Tab", NewTab),
                 MenuItem::action("New Private Tab", NewPrivateTab),
+                MenuItem::action("Open File…", OpenFile),
                 MenuItem::action("Close Tab", CloseTab),
                 MenuItem::action("Reopen Closed Tab", ReopenTab),
             ]),
@@ -1428,8 +1512,9 @@ fn main() -> anyhow::Result<()> {
             while let Ok(urls) = urls_receive.recv().await {
                 let _ = handle.update(cx, |_, window, cx| {
                     let _ = urls_view.update(cx, |this, cx| {
+                        // Web links, or files opened with Browser from Finder.
                         for url in urls {
-                            if mcp::origin(&url).is_some() {
+                            if mcp::origin(&url).is_some() || model::is_file_url(&url) {
                                 this.new_tab(url, false, window, cx);
                             }
                         }
