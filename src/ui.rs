@@ -108,7 +108,7 @@ impl Browser {
                     .px_2()
                     .flex()
                     .flex_col()
-                    .gap_0p5()
+                    .gap_1()
                     .child(
                         div()
                             .id("new-tab")
@@ -253,11 +253,8 @@ impl Browser {
             cx,
         );
         let strip = media.filter(|_| media_height > 0.5).map(|media| {
-            let label = match (&media.title, &media.artist) {
-                (Some(title), Some(artist)) => format!("{title} · {artist}"),
-                (Some(title), None) => title.clone(),
-                _ if media.playing => "Playing".to_string(),
-                _ => "Paused".to_string(),
+            let control = |id: &'static str, title: &str, icon: IconName| {
+                icon_button(id, title, icon, p).size(px(24.))
             };
             div()
                 .h(px(media_height))
@@ -265,77 +262,71 @@ impl Browser {
                 .opacity((media_height / MEDIA_STRIP).min(1.))
                 .flex()
                 .items_center()
-                .gap_0p5()
-                // Aligned with the title above (row padding + icon + gap).
-                .pl(px(32.))
-                .pr_1()
+                .px_1()
+                // Equal flexible sides keep playback centred in the cell.
+                .child(div().flex_1())
                 .child(
                     div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(rgb(p.muted))
-                        .child(label),
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .when(media.skips, |group| {
+                            group.child(
+                                control("media-previous", "Previous track", IconName::SkipBack)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.skip_track(id, false);
+                                    })),
+                            )
+                        })
+                        .child(
+                            control(
+                                "media-play",
+                                if media.playing { "Pause" } else { "Play" },
+                                if media.playing {
+                                    IconName::Pause
+                                } else {
+                                    IconName::Play
+                                },
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.toggle_media_playback(id, cx);
+                                },
+                            )),
+                        )
+                        .when(media.skips, |group| {
+                            group.child(
+                                control("media-next", "Next track", IconName::SkipForward)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.skip_track(id, true);
+                                    })),
+                            )
+                        }),
                 )
-                .when(media.skips, |strip| {
-                    strip.child(
-                        icon_button("media-previous", "Previous track", IconName::SkipBack, p)
-                            .size(px(24.))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.skip_track(id, false, cx);
-                            })),
-                    )
-                })
                 .child(
-                    icon_button(
-                        "media-play",
-                        if media.playing { "Pause" } else { "Play" },
-                        if media.playing {
-                            IconName::Pause
-                        } else {
-                            IconName::Play
-                        },
-                        p,
-                    )
-                    .size(px(24.))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.toggle_media_playback(id, cx);
-                    })),
-                )
-                .when(media.skips, |strip| {
-                    strip.child(
-                        icon_button("media-next", "Next track", IconName::SkipForward, p)
-                            .size(px(24.))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.skip_track(id, true, cx);
-                            })),
-                    )
-                })
-                .child(
-                    icon_button(
-                        "media-mute",
-                        if media.muted {
-                            "Unmute tab"
-                        } else {
-                            "Mute tab"
-                        },
-                        if media.muted {
-                            IconName::VolumeX
-                        } else {
-                            IconName::Volume2
-                        },
-                        p,
-                    )
-                    .size(px(24.))
-                    .when(media.muted, |d| d.text_color(rgb(p.accent)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.toggle_media_muted(id, cx);
-                    })),
+                    div().flex_1().flex().justify_end().child(
+                        control(
+                            "media-mute",
+                            if media.muted {
+                                "Unmute tab"
+                            } else {
+                                "Mute tab"
+                            },
+                            if media.muted {
+                                IconName::VolumeX
+                            } else {
+                                IconName::Volume2
+                            },
+                        )
+                        .when(media.muted, |d| d.text_color(rgb(p.accent)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.toggle_media_muted(id, cx);
+                        })),
+                    ),
                 )
         });
         let header = div()

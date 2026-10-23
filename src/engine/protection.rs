@@ -135,6 +135,16 @@ define_class!(
                 (Some(from), Some(to)) => from != to && from.split('#').next() == to.split('#').next(),
                 _ => false,
             };
+            // Wry's policy only admits HTTP(S), which would cancel ordinary page
+            // machinery: srcdoc, blob and data frames. Top-level data: stays
+            // blocked, as in other browsers. Downloads keep Wry's policy.
+            let scheme = target_url.as_deref().and_then(|url| url.split_once(':')).map(|(scheme, _)| scheme.to_ascii_lowercase());
+            let embedded = frame.is_some() && !main && matches!(scheme.as_deref(), Some("about" | "blob" | "data"));
+            let download = action.respondsToSelector(objc2::sel!(shouldPerformDownload)) && unsafe { action.shouldPerformDownload() };
+            if embedded && !download {
+                handler.call((WKNavigationActionPolicy::Allow,));
+                return;
+            }
             if !main || !browser || initial || frame_url.as_deref() == Some("about:blank") || same_document {
                 unsafe { state.original.webView_decidePolicyForNavigationAction_decisionHandler(view, action, handler); }
                 return;

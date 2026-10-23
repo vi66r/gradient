@@ -9,12 +9,10 @@ pub enum Event {
     QuitRequested,
     /// A page started or stopped playing audio or a media session.
     MediaChanged(u64),
-    /// A page's Media Session metadata, if it publishes one.
+    /// Whether a page publishes Media Session metadata (track controls).
     MediaSession {
         id: u64,
         session: bool,
-        title: Option<String>,
-        artist: Option<String>,
     },
     NavigationDecision {
         id: u64,

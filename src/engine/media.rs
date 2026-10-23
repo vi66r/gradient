@@ -24,7 +24,7 @@ use objc2::{
     runtime::{AnyObject, Bool, NSObject, Sel},
     sel,
 };
-use objc2_foundation::{NSError, NSString};
+use objc2_foundation::{NSError, NSNumber, NSString};
 use objc2_web_kit::{WKContentWorld, WKWebView};
 use std::ffi::c_void;
 
@@ -152,37 +152,16 @@ impl Media {
             unsafe { msg_send![&*self.view, _playPredominantOrNowPlayingMediaSession: &*done] };
     }
 
-    /// Reads the page's Media Session metadata: the title and artist macOS
-    /// Now Playing shows, and whether next/previous are worth offering. The
-    /// answer arrives as `Event::MediaSession`. WebKit's own now-playing title
-    /// SPI and metadata observer proved unreliable outside Safari.
+    /// Whether the page publishes Media Session metadata, and so likely
+    /// handles next/previous track. The answer arrives as `Event::MediaSession`.
     pub fn request_session(&self, id: u64, events: Sender<Event>) {
         let reply = RcBlock::new(move |value: *mut AnyObject, _: *mut NSError| {
-            let json = unsafe { value.as_ref() }
-                .and_then(|value| value.downcast_ref::<NSString>())
-                .map(|value| value.to_string())
-                .filter(|json| json.len() <= 4096)
-                .unwrap_or_default();
-            let found: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
-            let text = |field: &str| {
-                found[field]
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| value.chars().take(200).collect())
-            };
-            let _ = events.try_send(Event::MediaSession {
-                id,
-                session: found["session"].as_bool().unwrap_or(false),
-                title: text("title"),
-                artist: text("artist"),
-            });
+            let session = unsafe { value.as_ref() }
+                .and_then(|value| value.downcast_ref::<NSNumber>())
+                .is_some_and(|value| value.as_bool());
+            let _ = events.try_send(Event::MediaSession { id, session });
         });
-        self.run(
-            "(() => { const m = navigator.mediaSession?.metadata; \
-             return JSON.stringify({session: !!m, title: m?.title ?? '', artist: m?.artist ?? ''}); })()",
-            Some(&reply),
-        );
+        self.run("!!navigator.mediaSession?.metadata", Some(&reply));
     }
 
     pub fn skip(&self, forward: bool) {

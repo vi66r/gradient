@@ -63,14 +63,10 @@ struct Tab {
 struct TabMedia {
     playing: bool,
     muted: bool,
-    title: Option<String>,
-    artist: Option<String>,
     /// The page has a media session, so previous/next track are offered.
     skips: bool,
     /// Paused from the sidebar: keep the controls so it can be resumed.
     held: bool,
-    /// A title refresh loop is running for this tab.
-    refreshing: bool,
     /// False while collapsing, just before the media is dropped.
     shown: bool,
 }
@@ -703,10 +699,6 @@ impl Browser {
                 media.held = false;
             }
             page.request_media_session(id, self.events.clone());
-            if state.playing && !media.refreshing {
-                media.refreshing = true;
-                self.refresh_media_while_playing(id, cx);
-            }
         } else if tab.media.is_some() {
             self.collapse_media_later(id, cx);
         }
@@ -774,53 +766,15 @@ impl Browser {
         cx.notify();
     }
 
-    fn skip_track(&mut self, id: u64, forward: bool, cx: &mut Context<Self>) {
-        let Some(page) = self
+    fn skip_track(&mut self, id: u64, forward: bool) {
+        if let Some(page) = self
             .tabs
             .iter()
             .find(|tab| tab.id == id)
-            .and_then(|tab| tab.page.clone())
-        else {
-            return;
-        };
-        page.skip_track(forward);
-        // Pages update their metadata once the next track is under way.
-        let events = self.events.clone();
-        cx.spawn(async move |_, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(400))
-                .await;
-            page.request_media_session(id, events);
-        })
-        .detach();
-    }
-
-    /// Track changes don't change playback state, so while a tab plays its
-    /// title is re-read every few seconds. Stops as soon as playback does.
-    fn refresh_media_while_playing(&mut self, id: u64, cx: &mut Context<Self>) {
-        let events = self.events.clone();
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(5)).await;
-                let playing = this
-                    .update(cx, |this, _| {
-                        let tab = this.tabs.iter_mut().find(|tab| tab.id == id)?;
-                        let page = tab.page.clone()?;
-                        let media = tab.media.as_mut()?;
-                        if media.playing {
-                            Some(page)
-                        } else {
-                            media.refreshing = false;
-                            None
-                        }
-                    })
-                    .ok()
-                    .flatten();
-                let Some(page) = playing else { break };
-                page.request_media_session(id, events.clone());
-            }
-        })
-        .detach();
+            .and_then(|tab| tab.page.as_ref())
+        {
+            page.skip_track(forward);
+        }
     }
 
     fn toggle_media_muted(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -941,12 +895,7 @@ impl Browser {
                 }
             }
             engine::Event::MediaChanged(id) => self.media_changed(id, cx),
-            engine::Event::MediaSession {
-                id,
-                session,
-                title,
-                artist,
-            } => {
+            engine::Event::MediaSession { id, session } => {
                 if let Some(media) = self
                     .tabs
                     .iter_mut()
@@ -954,8 +903,6 @@ impl Browser {
                     .and_then(|tab| tab.media.as_mut())
                 {
                     media.skips = session;
-                    media.title = title;
-                    media.artist = artist;
                 }
             }
             engine::Event::Loading(id, loading, url) => {
