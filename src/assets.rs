@@ -19,7 +19,11 @@ gpui::assets::icon_assets!(
         LockKeyhole,
         CloudOff,
         Search,
-        Info
+        Info,
+        Play,
+        Pause,
+        Volume2,
+        VolumeX
     ]
 );
 

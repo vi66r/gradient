@@ -54,6 +54,21 @@ struct Tab {
     page: Option<Rc<engine::Page>>,
     error: Option<String>,
     grant: Option<(String, u64)>,
+    /// Present while the tab plays (or was paused from the sidebar); drives
+    /// the expanded sidebar cell.
+    media: Option<TabMedia>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TabMedia {
+    playing: bool,
+    muted: bool,
+    title: Option<String>,
+    artist: Option<String>,
+    /// Paused from the sidebar: keep the controls so it can be resumed.
+    held: bool,
+    /// False while collapsing, just before the media is dropped.
+    shown: bool,
 }
 
 /// Commands from a tab's context menu. They carry the tab's ID because the
@@ -193,6 +208,7 @@ impl Browser {
                 private: false,
                 loading: false,
                 revision: 0,
+                media: None,
                 page: None,
                 error: None,
                 grant: None,
@@ -208,6 +224,7 @@ impl Browser {
                 private: false,
                 loading: false,
                 revision: 0,
+                media: None,
                 page: None,
                 error: None,
                 grant: None,
@@ -413,6 +430,7 @@ impl Browser {
                 private,
                 loading: false,
                 revision: 0,
+                media: None,
                 page: None,
                 error: None,
                 grant: None,
@@ -664,6 +682,102 @@ impl Browser {
         cx.notify();
     }
 
+    fn media_changed(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) else {
+            return;
+        };
+        let Some(page) = &tab.page else {
+            return;
+        };
+        let state = page.media_state();
+        if state.playing || state.session || tab.media.as_ref().is_some_and(|media| media.held) {
+            let media = tab.media.get_or_insert_with(TabMedia::default);
+            media.playing = state.playing;
+            media.muted = state.muted;
+            media.shown = true;
+            if state.playing {
+                media.held = false;
+            }
+            page.request_media_title(id, self.events.clone());
+        } else if tab.media.is_some() {
+            self.collapse_media_later(id, cx);
+        }
+    }
+
+    /// Pages stop briefly between tracks; only collapse if playback stays off.
+    fn collapse_media_later(&mut self, id: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(2500))
+                .await;
+            let collapsed = this
+                .update(cx, |this, cx| {
+                    let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == id) else {
+                        return false;
+                    };
+                    let idle = tab.page.as_ref().is_none_or(|page| {
+                        let state = page.media_state();
+                        !state.playing && !state.session
+                    });
+                    match &mut tab.media {
+                        Some(media) if idle && !media.held => {
+                            media.shown = false;
+                            cx.notify();
+                            true
+                        }
+                        _ => false,
+                    }
+                })
+                .unwrap_or(false);
+            if !collapsed {
+                return;
+            }
+            // Let the cell animate closed before dropping its contents.
+            cx.background_executor()
+                .timer(Duration::from_millis(300))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == id)
+                    && tab.media.as_ref().is_some_and(|media| !media.shown)
+                {
+                    tab.media = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn toggle_media_playback(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) else {
+            return;
+        };
+        let (Some(page), Some(media)) = (&tab.page, &mut tab.media) else {
+            return;
+        };
+        if media.playing {
+            page.pause_media();
+            media.playing = false;
+            media.held = true;
+        } else {
+            page.play_media();
+            media.held = false;
+        }
+        cx.notify();
+    }
+
+    fn toggle_media_muted(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) else {
+            return;
+        };
+        let (Some(page), Some(media)) = (&tab.page, &mut tab.media) else {
+            return;
+        };
+        media.muted = !media.muted;
+        page.set_muted(media.muted);
+        cx.notify();
+    }
+
     /// The live address when the page has one, else the saved address.
     fn tab_url(&self, index: usize) -> String {
         let tab = &self.tabs[index];
@@ -769,10 +883,25 @@ impl Browser {
                     self.dirty = true;
                 }
             }
+            engine::Event::MediaChanged(id) => self.media_changed(id, cx),
+            engine::Event::MediaTitle(id, title, artist) => {
+                if let Some(media) = self
+                    .tabs
+                    .iter_mut()
+                    .find(|tab| tab.id == id)
+                    .and_then(|tab| tab.media.as_mut())
+                {
+                    media.title = title;
+                    media.artist = artist;
+                }
+            }
             engine::Event::Loading(id, loading, url) => {
                 if let Some(index) = self.tabs.iter().position(|tab| tab.id == id) {
                     if loading {
                         self.tabs[index].revision = self.tabs[index].revision.wrapping_add(1);
+                        // A new document starts without media; WebKit reports
+                        // again if it plays.
+                        self.tabs[index].media = None;
                     }
                     self.tabs[index].loading = loading;
                     if self.tabs[index]
@@ -1072,6 +1201,7 @@ impl Browser {
             Discard::Suspend(_) => {
                 let tab = &mut self.tabs[index];
                 tab.page = None;
+                tab.media = None;
                 tab.grant = None;
                 tab.loading = false;
                 tab.revision = tab.revision.wrapping_add(1);

@@ -7,6 +7,10 @@ use std::{cell::Cell, rc::Rc};
 #[derive(Debug)]
 pub enum Event {
     QuitRequested,
+    /// A page started or stopped playing audio or a media session.
+    MediaChanged(u64),
+    /// The now-playing title and artist for a page, when it has them.
+    MediaTitle(u64, Option<String>, Option<String>),
     NavigationDecision {
         id: u64,
         reply: Sender<bool>,
@@ -49,6 +53,8 @@ pub struct Page {
     pub raw: wry::WebView,
     #[cfg(target_os = "macos")]
     _protection: objc2::rc::Retained<protection::Protection>,
+    #[cfg(target_os = "macos")]
+    media: media::Media,
     visible: Cell<bool>,
     bounds: Cell<Bounds<Pixels>>,
     #[cfg(target_os = "macos")]
@@ -99,6 +105,7 @@ impl Page {
             profile,
         } = options;
         let protection_events = events.clone();
+        let media_events = events.clone();
         let title_events = events.clone();
         let load_events = events.clone();
         let popup_events = events.clone();
@@ -158,13 +165,24 @@ impl Page {
             use wry::WebViewExtMacOS;
             protection::Protection::install(&raw.webview(), id, protection_events, cx)
         };
+        #[cfg(target_os = "macos")]
+        let media = {
+            use wry::WebViewExtMacOS;
+            media::Media::install(
+                objc2::rc::Retained::into_super(raw.webview()),
+                id,
+                media_events,
+            )
+        };
         #[cfg(not(target_os = "macos"))]
-        let _ = protection_events;
+        let _ = (protection_events, media_events);
         raw.load_url(url)?;
         Ok(Rc::new(Self {
             raw,
             #[cfg(target_os = "macos")]
             _protection: protection,
+            #[cfg(target_os = "macos")]
+            media,
             visible: Cell::new(false),
             bounds: Cell::new(Bounds::default()),
             #[cfg(target_os = "macos")]
@@ -174,6 +192,41 @@ impl Page {
             #[cfg(target_os = "macos")]
             host: std::cell::RefCell::new(None),
         }))
+    }
+
+    pub fn media_state(&self) -> MediaState {
+        #[cfg(target_os = "macos")]
+        {
+            self.media.state()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            MediaState::default()
+        }
+    }
+
+    pub fn set_muted(&self, muted: bool) {
+        #[cfg(target_os = "macos")]
+        self.media.set_muted(muted);
+        #[cfg(not(target_os = "macos"))]
+        let _ = muted;
+    }
+
+    pub fn play_media(&self) {
+        #[cfg(target_os = "macos")]
+        self.media.play();
+    }
+
+    pub fn pause_media(&self) {
+        #[cfg(target_os = "macos")]
+        self.media.pause();
+    }
+
+    pub fn request_media_title(&self, id: u64, events: Sender<Event>) {
+        #[cfg(target_os = "macos")]
+        self.media.request_title(id, events);
+        #[cfg(not(target_os = "macos"))]
+        let _ = (id, events);
     }
 
     pub async fn work_state(
@@ -505,3 +558,16 @@ pub use termination::TerminationGuard;
 
 #[cfg(target_os = "macos")]
 mod protection;
+
+#[cfg(target_os = "macos")]
+mod media;
+#[cfg(target_os = "macos")]
+pub use media::MediaState;
+/// Media playback is only observable through WebKit on macOS.
+#[cfg(not(target_os = "macos"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MediaState {
+    pub playing: bool,
+    pub muted: bool,
+    pub session: bool,
+}

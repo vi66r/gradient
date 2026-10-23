@@ -56,6 +56,8 @@ pub(crate) fn palette(dark: bool) -> Palette {
 const SIDEBAR: f32 = 248.;
 /// Matches the native page host's corner radius in engine.rs.
 pub(crate) const CARD_RADIUS: f32 = 10.;
+/// Height of the media controls a playing tab's sidebar cell grows by.
+const MEDIA_STRIP: f32 = 30.;
 const FAST: Duration = Duration::from_millis(140);
 const NORMAL: Duration = Duration::from_millis(200);
 
@@ -238,12 +240,85 @@ impl Browser {
         };
         let group: SharedString = format!("tab-{}", tab.id).into();
         let id = tab.id;
-        div()
-            .id(("tab", tab.id))
-            .group(group.clone())
-            .role(Role::Tab)
-            .aria_selected(selected)
-            .aria_label(title.clone())
+        let media = tab.media.as_ref().filter(|_| tab.page.is_some());
+        let media_height = motion::transition(
+            format!("media-height-{id}"),
+            if media.is_some_and(|media| media.shown) {
+                MEDIA_STRIP
+            } else {
+                0.
+            },
+            Transition::new(NORMAL),
+            window,
+            cx,
+        );
+        let strip = media.filter(|_| media_height > 0.5).map(|media| {
+            let label = match (&media.title, &media.artist) {
+                (Some(title), Some(artist)) => format!("{title} · {artist}"),
+                (Some(title), None) => title.clone(),
+                _ if media.playing => "Playing".to_string(),
+                _ => "Paused".to_string(),
+            };
+            div()
+                .h(px(media_height))
+                .overflow_hidden()
+                .opacity((media_height / MEDIA_STRIP).min(1.))
+                .flex()
+                .items_center()
+                .gap_0p5()
+                // Aligned with the title above (row padding + icon + gap).
+                .pl(px(32.))
+                .pr_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(rgb(p.muted))
+                        .child(label),
+                )
+                .child(
+                    icon_button(
+                        "media-play",
+                        if media.playing { "Pause" } else { "Play" },
+                        if media.playing {
+                            IconName::Pause
+                        } else {
+                            IconName::Play
+                        },
+                        p,
+                    )
+                    .size(px(24.))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.toggle_media_playback(id, cx);
+                    })),
+                )
+                .child(
+                    icon_button(
+                        "media-mute",
+                        if media.muted {
+                            "Unmute tab"
+                        } else {
+                            "Mute tab"
+                        },
+                        if media.muted {
+                            IconName::VolumeX
+                        } else {
+                            IconName::Volume2
+                        },
+                        p,
+                    )
+                    .size(px(24.))
+                    .when(media.muted, |d| d.text_color(rgb(p.accent)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.toggle_media_muted(id, cx);
+                    })),
+                )
+        });
+        let header = div()
             .h(px(34.))
             .flex_shrink_0()
             .pl_2()
@@ -251,11 +326,6 @@ impl Browser {
             .flex()
             .items_center()
             .gap_2()
-            .rounded(px(8.))
-            .cursor_pointer()
-            .bg(background)
-            .when(selected, |d| d.shadow_xs())
-            .when(!selected, |d| d.hover(|s| s.bg(rgb(p.hover))))
             .child(icon)
             .child(
                 div()
@@ -279,7 +349,7 @@ impl Browser {
                     .rounded(px(6.))
                     .text_color(rgb(p.muted))
                     .when(!selected, |d| {
-                        d.opacity(0.).group_hover(group, |s| s.opacity(1.))
+                        d.opacity(0.).group_hover(group.clone(), |s| s.opacity(1.))
                     })
                     .hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
                     .child(Icon::new(IconName::X).size_3())
@@ -287,7 +357,23 @@ impl Browser {
                         cx.stop_propagation();
                         this.close(index, w, cx);
                     })),
-            )
+            );
+        div()
+            .id(("tab", tab.id))
+            .group(group.clone())
+            .role(Role::Tab)
+            .aria_selected(selected)
+            .aria_label(title.clone())
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .rounded(px(8.))
+            .cursor_pointer()
+            .bg(background)
+            .when(selected, |d| d.shadow_xs())
+            .when(!selected, |d| d.hover(|s| s.bg(rgb(p.hover))))
+            .child(header)
+            .children(strip)
             .on_click(cx.listener(move |this, _, w, cx| this.activate(index, w, cx)))
             // Acts on this tab without switching to it, as in Safari.
             .on_mouse_down(
