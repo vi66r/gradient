@@ -13,6 +13,7 @@ use objc2_web_kit::{
 };
 use std::{
     cell::{Cell, RefCell},
+    collections::HashSet,
     rc::Rc,
     time::Duration,
 };
@@ -77,6 +78,34 @@ pub struct Ivars {
     /// Set just before the shell (address field, agent) loads a URL, so that
     /// main-frame decision is guarded while the page's own loads are not.
     shell: Cell<bool>,
+    /// An "Open in app?" prompt from this tab is showing; further app links
+    /// from the tab are dropped until it is answered.
+    app_prompt: Rc<Cell<bool>>,
+    /// App-link schemes the user declined on the current document. Cleared
+    /// when the next main-frame navigation commits.
+    declined: Rc<RefCell<HashSet<String>>>,
+}
+
+/// What to do with a navigation to a non-web URL scheme.
+#[derive(Debug, PartialEq, Eq)]
+enum Handoff {
+    /// Not an app link: keep the usual policy (web, page machinery, blocked).
+    Ignore,
+    /// An app link from a subframe (ads, embeds): cancel without a dialog.
+    Drop,
+    /// An app link from the main frame: cancel and ask the user.
+    Ask,
+}
+
+/// `top_level` is the target frame's main-ness, or the source frame's for a
+/// new-window request (no target frame), so `target=_blank` links in an
+/// embedded frame cannot prompt either.
+fn handoff(scheme: Option<&str>, top_level: bool) -> Handoff {
+    match scheme.map(crate::model::scheme) {
+        Some(crate::model::Scheme::App) if top_level => Handoff::Ask,
+        Some(crate::model::Scheme::App) => Handoff::Drop,
+        _ => Handoff::Ignore,
+    }
 }
 
 // Every retained WebKit decision must complete exactly once, even when its
@@ -139,6 +168,28 @@ define_class!(
             // machinery: srcdoc, blob and data frames. Top-level data: stays
             // blocked, as in other browsers. Downloads keep Wry's policy.
             let scheme = target_url.as_deref().and_then(|url| url.split_once(':')).map(|(scheme, _)| scheme.to_ascii_lowercase());
+            let top_level = match &frame {
+                Some(_) => main,
+                None => {
+                    // Nullable in practice despite the header annotation.
+                    let source: Option<Retained<WKFrameInfo>> = unsafe { msg_send![action, sourceFrame] };
+                    source.is_some_and(|source| unsafe { source.isMainFrame() })
+                }
+            };
+            match handoff(scheme.as_deref(), top_level) {
+                Handoff::Ignore => {}
+                Handoff::Drop => {
+                    handler.call((WKNavigationActionPolicy::Cancel,));
+                    return;
+                }
+                Handoff::Ask => {
+                    handler.call((WKNavigationActionPolicy::Cancel,));
+                    if let (Some(url), Some(scheme)) = (target_url, scheme) {
+                        self.offer_app_link(view, url, scheme);
+                    }
+                    return;
+                }
+            }
             let embedded = frame.is_some() && !main && matches!(scheme.as_deref(), Some("about" | "blob" | "data"));
             let download = action.respondsToSelector(objc2::sel!(shouldPerformDownload)) && unsafe { action.shouldPerformDownload() };
             if embedded && !download {
@@ -179,6 +230,7 @@ define_class!(
         #[unsafe(method(webView:didCommitNavigation:))]
         unsafe fn committed(&self, view: &WKWebView, navigation: Option<&WKNavigation>) {
             self.ivars().approved.borrow_mut().take();
+            self.ivars().declined.borrow_mut().clear();
             unsafe { self.ivars().original.webView_didCommitNavigation(view, navigation); }
         }
 
@@ -207,6 +259,70 @@ define_class!(
 );
 
 impl Protection {
+    /// The WebKit navigation is already cancelled. Ask the shell to confirm,
+    /// unless this tab has a prompt open or the user declined this scheme on
+    /// the current document — a page cannot stack or repeat dialogs.
+    fn offer_app_link(&self, view: &WKWebView, url: String, scheme: String) {
+        let state = self.ivars();
+        if state.app_prompt.get() || state.declined.borrow().contains(&scheme) {
+            return;
+        }
+        if url.len() > crate::model::APP_LINK_MAX {
+            let _ = state.events.try_send(Event::Notice(format!(
+                "That “{scheme}:” link is too long to open in another app."
+            )));
+            return;
+        }
+        let Some(app) = super::app_link::handler(&url) else {
+            let _ = state.events.try_send(Event::Notice(format!(
+                "No app on this Mac opens “{scheme}:” links."
+            )));
+            return;
+        };
+        let site = unsafe { view.URL() }
+            .and_then(|url| url.absoluteString())
+            .and_then(|url| {
+                url::Url::parse(&url.to_string())
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_string))
+            })
+            .unwrap_or_else(|| "This page".into());
+        let (reply, answer) = async_channel::bounded(1);
+        let event = Event::AppLink {
+            id: state.id,
+            url: url.clone(),
+            app,
+            site,
+            scheme: scheme.clone(),
+            reply,
+        };
+        if state.events.try_send(event).is_err() {
+            return;
+        }
+        state.app_prompt.set(true);
+        let open = Busy(state.app_prompt.clone());
+        let declined = state.declined.clone();
+        state
+            .foreground
+            .spawn(async move {
+                let _open = open;
+                match answer.recv().await {
+                    Ok(true) => {
+                        if !super::app_link::open(&url) {
+                            log::warn!("No app accepted a “{scheme}:” link");
+                        }
+                    }
+                    Ok(false) => {
+                        declined.borrow_mut().insert(scheme);
+                    }
+                    // The shell could not show a prompt (another dialog, tab
+                    // not frontmost); the user didn't decide anything.
+                    Err(_) => {}
+                }
+            })
+            .detach();
+    }
+
     pub fn navigation_pending(&self) -> bool {
         self.ivars().busy.get()
     }
@@ -244,10 +360,40 @@ impl Protection {
                 busy: Rc::new(Cell::new(false)),
                 approved: Rc::new(RefCell::new(None)),
                 shell: Cell::new(false),
+                app_prompt: Rc::new(Cell::new(false)),
+                declined: Rc::new(RefCell::new(HashSet::new())),
             });
             let delegate: Retained<Self> = msg_send![super(object), init];
             view.setNavigationDelegate(Some(ProtocolObject::from_ref(&*delegate)));
             delegate
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_main_frame_app_links_prompt() {
+        assert_eq!(handoff(Some("mailto"), true), Handoff::Ask);
+        assert_eq!(handoff(Some("zoommtg"), true), Handoff::Ask);
+        assert_eq!(handoff(Some("mailto"), false), Handoff::Drop);
+        assert_eq!(handoff(Some("tel"), false), Handoff::Drop);
+        for scheme in [
+            "https",
+            "http",
+            "about",
+            "blob",
+            "data",
+            "file",
+            "javascript",
+            "x-apple.systempreferences",
+            "applescript",
+        ] {
+            assert_eq!(handoff(Some(scheme), true), Handoff::Ignore, "{scheme}");
+            assert_eq!(handoff(Some(scheme), false), Handoff::Ignore, "{scheme}");
+        }
+        assert_eq!(handoff(None, true), Handoff::Ignore);
     }
 }

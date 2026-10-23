@@ -175,8 +175,9 @@ impl Browser {
             }
             if matches!(event, InputEvent::PressEnter { .. }) {
                 let value = input.read(cx).value().to_string();
-                match model::destination(&value) {
-                    Ok(url) => this.navigate(url, window, cx),
+                match model::entry(&value) {
+                    Ok(model::Entry::Web(url)) => this.navigate(url, window, cx),
+                    Ok(model::Entry::App(url)) => this.typed_app_link(url, window, cx),
                     Err(error) => {
                         this.notice = Some(error.to_string());
                         cx.notify();
@@ -440,6 +441,73 @@ impl Browser {
         if self.tabs[self.active].saved.url == START {
             self.focus_address(window, cx);
         }
+    }
+
+    /// An app link typed into the address field (`mailto:…`). Private tabs may
+    /// hand off too: like a link click, it's the user's own request.
+    fn typed_app_link(&mut self, url: url::Url, window: &mut Window, cx: &mut Context<Self>) {
+        let scheme = url.scheme().to_string();
+        match engine::app_handler(url.as_str()) {
+            engine::AppHandler::App(app) => {
+                if self.discard_pending {
+                    return;
+                }
+                let detail = format!("You entered a “{scheme}:” link. {app} will open it.");
+                self.prompt_app_link(url.into(), &app, &detail, None, window, cx);
+            }
+            engine::AppHandler::None => {
+                self.notice = Some(format!("No app on this Mac opens “{scheme}:” links."));
+            }
+            engine::AppHandler::Unsupported => {
+                self.notice = Some("This prototype supports HTTP and HTTPS links only.".into());
+            }
+        }
+        cx.notify();
+    }
+
+    /// Asks before handing a link to another app; Cancel is the default.
+    /// `reply` reports the answer to the page's per-tab abuse guard.
+    fn prompt_app_link(
+        &mut self,
+        url: String,
+        app: &str,
+        detail: &str,
+        reply: Option<async_channel::Sender<bool>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.discard_pending = true;
+        let answer = window.prompt(
+            PromptLevel::Info,
+            &format!("Open “{app}”?"),
+            Some(detail),
+            &["Cancel", "Open"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let confirmed = answer.await == Ok(1);
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.discard_pending = false;
+                // A typed link leaves the field; a page's request must not
+                // discard an address the user is editing.
+                if reply.is_none() {
+                    this.release_address(window, cx);
+                }
+                match reply {
+                    // The page's guard opens it, so a closed tab's request
+                    // still opens once the user agreed.
+                    Some(reply) => {
+                        let _ = reply.try_send(confirmed);
+                    }
+                    None if confirmed && !engine::open_app_link(&url) => {
+                        this.notice = Some("The app didn’t open the link.".into());
+                    }
+                    None => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn navigate(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -887,6 +955,22 @@ impl Browser {
                     });
                 })
                 .detach();
+            }
+            engine::Event::AppLink {
+                id,
+                url,
+                app,
+                site,
+                scheme,
+                reply,
+            } => {
+                // Only the frontmost tab may ask, and never over another
+                // dialog. Dropping `reply` leaves the page free to ask again.
+                if self.discard_pending || self.lab || self.tabs[self.active].id != id {
+                    return;
+                }
+                let detail = format!("{site} wants to open a “{scheme}:” link in {app}.");
+                self.prompt_app_link(url, &app, &detail, Some(reply), window, cx);
             }
             engine::Event::Title(id, title) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {

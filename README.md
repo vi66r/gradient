@@ -29,6 +29,12 @@ Normal app state lives in `~/Library/Application Support/RafiBrowser`. A profile
 - Media controls in the sidebar (macOS). When a tab plays audio, its cell expands with play/pause and a page mute that also covers Web Audio and cross-origin frames, including for background tabs. Pages that publish a Media Session (Spotify, YouTube, SoundCloud) also get previous/next track buttons, which run the page's own handlers. A cell you paused stays so you can resume; otherwise it collapses about 2.5 s after playback stops. Playback state and mute use WebKit private SPI (`_isPlayingAudio`, `_setPageMuted:`), as Safari does. Track skips use `navigator.mediaSession` from an isolated script world, which pages can't observe. Each selector is checked first, so the feature switches off if WebKit removes one.
 - Private tabs use ephemeral engine storage, are omitted from saved sessions and recently closed tabs, and cannot be shared with agents.
 - On macOS, closing, suspending, returning to the start screen, quitting, and browser-initiated navigation (Back/Forward including swipes, Reload, addresses loaded from the address field or an agent) check for edits the user made. Only work the user produced counts: typing or changes in form fields (search fields excepted), rich-text edits, and clicks or typing inside content Browser can't inspect. Settled pages proceed quietly. A page's own links, redirects and frame loads are never delayed or guarded. Cancel preserves the page. Quit also checks Request Lab drafts; session-write failures require a separate explicit choice. See the work-protection limits below.
+- App links, as in Safari (macOS). When a page's link, form or redirect goes to a non-web scheme (`mailto:`, `tel:`, `sms:`, `facetime:`, `zoommtg:`, `slack:`, `spotify:`, `vscode:`…), WebKit cancels the navigation and Browser asks "Open “Mail”?", naming the site and the scheme. Cancel is the default; Open hands the link to the app macOS has registered. A link typed into the address field takes the same path.
+  - Only the active tab's main frame can ask. Embedded frames, such as ads, are cancelled silently.
+  - One prompt per tab at a time. After Cancel, that tab can't ask for the same scheme again until its next page commits.
+  - Schemes with no app show a notice.
+  - Never handed off: `file:`, `javascript:`, `data:`, `blob:`, `about:`, `x-apple…`, `applescript:`, `help:`, `x-man-page:`, and network-volume and shell schemes (`smb:`, `afp:`, `ftp:`, `ssh:`, `telnet:`, `vnc:`…). Links over 8 KiB are refused.
+  - Private tabs can hand off too.
 - Manual suspension under **Tools → Suspend Current Tab**. Resuming reloads the URL.
 - System WebKit's GPU rendering; the local WebGPU cube renders successfully on the tested Mac. No application-side screenshot or texture-copy pipeline.
 - Native **Request lab**: HTTP methods, custom headers and body, status/timing/size, formatted JSON responses, and cURL export. Requests run off the UI thread, have a 30-second timeout, and cap displayed responses at 2 MiB. Redirects are returned for inspection rather than automatically followed.
@@ -71,6 +77,7 @@ cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 # macOS: real WebKit checks in an ephemeral data store
 swift scripts/check-work-protection.swift
+swift scripts/check-app-links.swift
 python3 scripts/test-server.py --port 8765
 ```
 

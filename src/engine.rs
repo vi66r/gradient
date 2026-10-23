@@ -18,6 +18,17 @@ pub enum Event {
         id: u64,
         reply: Sender<bool>,
     },
+    /// A page's main frame asked for a link another app handles. Reply
+    /// `true` to open it, `false` if the user declined; drop to ignore.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    AppLink {
+        id: u64,
+        url: String,
+        app: String,
+        site: String,
+        scheme: String,
+        reply: Sender<bool>,
+    },
     Title(u64, String),
     Loading(u64, bool, String),
     NewTab(u64, String),
@@ -34,6 +45,41 @@ pub enum Event {
         reply: std::sync::mpsc::SyncSender<Result<serde_json::Value, String>>,
         value: String,
     },
+}
+
+/// Whether macOS can hand a link to another app, and which one.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub enum AppHandler {
+    App(String),
+    None,
+    /// This platform build cannot hand links to other apps.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    Unsupported,
+}
+
+pub fn app_handler(url: &str) -> AppHandler {
+    #[cfg(target_os = "macos")]
+    {
+        app_link::handler(url).map_or(AppHandler::None, AppHandler::App)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = url;
+        AppHandler::Unsupported
+    }
+}
+
+/// Opens a link in its registered app. Call only after the user confirmed.
+pub fn open_app_link(url: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        app_link::open(url)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = url;
+        false
+    }
 }
 
 pub struct PageOptions<'a> {
@@ -568,6 +614,9 @@ pub use termination::TerminationGuard;
 
 #[cfg(target_os = "macos")]
 mod protection;
+
+#[cfg(target_os = "macos")]
+mod app_link;
 
 #[cfg(target_os = "macos")]
 mod media;
