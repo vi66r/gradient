@@ -32,6 +32,8 @@ pub enum Event {
     Title(u64, String),
     Loading(u64, bool, String),
     NewTab(u64, String),
+    /// Local files dropped on a page, as file URLs, to open in new tabs.
+    OpenFiles(u64, Vec<String>),
     Notice(String),
     /// A fetched site icon for a host key, or `None` when none could be used.
     Icon(String, Option<Vec<u8>>),
@@ -98,10 +100,17 @@ impl Drop for NativeHost {
     }
 }
 
+/// One-shot permission for the next `file:` decision Wry's navigation handler
+/// sees. Only Browser sets it: on macOS, `Protection` after applying the file
+/// policy; elsewhere, `Page::load_file`. A web page can never set it.
+type FileGate = Rc<Cell<bool>>;
+
 pub struct Page {
     pub raw: wry::WebView,
     #[cfg(target_os = "macos")]
     _protection: objc2::rc::Retained<protection::Protection>,
+    #[cfg(not(target_os = "macos"))]
+    file_gate: FileGate,
     #[cfg(target_os = "macos")]
     media: media::Media,
     visible: Cell<bool>,
@@ -123,10 +132,52 @@ impl Drop for Page {
 impl Page {
     /// Loads an address on the browser's behalf (address field, agent). Only
     /// these loads, Back/Forward and Reload pass through the work guard.
-    pub fn load_url(&self, url: &str) -> wry::Result<()> {
+    pub fn load_url(&self, url: &str) -> anyhow::Result<()> {
         #[cfg(target_os = "macos")]
         self._protection.expect_shell_navigation();
-        self.raw.load_url(url)
+        self.load(url)
+    }
+
+    fn load(&self, url: &str) -> anyhow::Result<()> {
+        if crate::model::is_file_url(url) {
+            self.load_file(url)
+        } else {
+            Ok(self.raw.load_url(url)?)
+        }
+    }
+
+    /// WebKit refuses a plain `loadRequest:` of a file URL, so local files
+    /// load with read access to their own folder (relative assets work), never
+    /// the whole disk. The navigation is marked as Browser's own.
+    fn load_file(&self, url: &str) -> anyhow::Result<()> {
+        use anyhow::Context;
+        let path = crate::model::file_path(url).context("That file address is not valid.")?;
+        let access = crate::model::read_access(&path);
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_foundation::{NSString, NSURL};
+            use wry::WebViewExtMacOS;
+            let target = NSURL::URLWithString(&NSString::from_str(url))
+                .context("That file address is not valid.")?;
+            let access = NSURL::fileURLWithPath_isDirectory(
+                &NSString::from_str(&access.to_string_lossy()),
+                access.is_dir(),
+            );
+            self._protection.expect_file_navigation(path);
+            unsafe {
+                self.raw
+                    .webview()
+                    .loadFileURL_allowingReadAccessToURL(&target, &access);
+            }
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            // WebKitGTK loads file URIs directly; Wry's handler admits it once.
+            let _ = (path, access);
+            self.file_gate.set(true);
+            Ok(self.raw.load_url(url)?)
+        }
     }
 
     pub fn navigation_pending(&self) -> bool {
@@ -160,6 +211,12 @@ impl Page {
         let popup_events = events.clone();
         let navigation_events = events.clone();
         let permission_events = events.clone();
+        let file_gate = FileGate::default();
+        let navigation_gate = file_gate.clone();
+        #[cfg(target_os = "macos")]
+        let dropped = protection::Dropped::default();
+        #[cfg(target_os = "macos")]
+        let drop_record = dropped.clone();
         let builder = wry::WebViewBuilder::new_with_web_context(web_context)
             .with_visible(false)
             .with_focused(false)
@@ -174,6 +231,10 @@ impl Page {
                 let _ = load_events.try_send(Event::Loading(id, matches!(event, wry::PageLoadEvent::Started), url));
             })
             .with_navigation_handler(move |url| {
+                if crate::model::is_file_url(&url) {
+                    // Browser applied the file policy before admitting this.
+                    return navigation_gate.replace(false);
+                }
                 let allowed = crate::model::allowed_navigation(&url);
                 if !allowed { let _ = navigation_events.try_send(Event::Notice("This prototype supports HTTP and HTTPS links only.".into())); }
                 allowed
@@ -195,7 +256,17 @@ impl Page {
         #[cfg(target_os = "macos")]
         let builder = {
             use wry::WebViewBuilderExtDarwin;
-            builder.with_data_store_identifier(profile)
+            builder
+                .with_data_store_identifier(profile)
+                // Pages keep their own drop zones. WebKit's fallback of
+                // loading a dropped file becomes new tabs (see `Protection`),
+                // which needs the paths the user actually dropped.
+                .with_drag_drop_handler(move |event| {
+                    if let wry::DragDropEvent::Drop { paths, .. } = event {
+                        drop_record.record(paths);
+                    }
+                    false
+                })
         };
         #[cfg(not(target_os = "macos"))]
         let _ = profile;
@@ -212,7 +283,16 @@ impl Page {
         #[cfg(target_os = "macos")]
         let protection = {
             use wry::WebViewExtMacOS;
-            protection::Protection::install(&raw.webview(), id, protection_events, cx)
+            protection::Protection::install(
+                &raw.webview(),
+                protection::Policy {
+                    id,
+                    events: protection_events,
+                    file_gate,
+                    dropped,
+                },
+                cx,
+            )
         };
         #[cfg(target_os = "macos")]
         let media = {
@@ -225,11 +305,12 @@ impl Page {
         };
         #[cfg(not(target_os = "macos"))]
         let _ = (protection_events, media_events);
-        raw.load_url(url)?;
-        Ok(Rc::new(Self {
+        let page = Rc::new(Self {
             raw,
             #[cfg(target_os = "macos")]
             _protection: protection,
+            #[cfg(not(target_os = "macos"))]
+            file_gate,
             #[cfg(target_os = "macos")]
             media,
             visible: Cell::new(false),
@@ -240,7 +321,9 @@ impl Page {
             attaching: Cell::new(false),
             #[cfg(target_os = "macos")]
             host: std::cell::RefCell::new(None),
-        }))
+        });
+        page.load(url)?;
+        Ok(page)
     }
 
     pub fn media_state(&self) -> MediaState {

@@ -20,6 +20,13 @@ impl Browser {
             cx.notify();
             return;
         }
+        // Grants are origin-based and a file has none; local files can also
+        // be sensitive. Refuse explicitly rather than by accident.
+        if crate::model::is_file_url(&tab.saved.url) {
+            self.notice = Some("Local files can’t be shared with agents.".into());
+            cx.notify();
+            return;
+        }
         let origin = tab
             .page
             .as_ref()
