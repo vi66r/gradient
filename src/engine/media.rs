@@ -8,6 +8,13 @@
 //! Store bound and is meant to be open source. Every selector is checked with
 //! `respondsToSelector:` first, so if WebKit drops one the controls go away
 //! instead of crashing.
+//!
+//! Track skipping has no SPI. It goes through the page's own Media Session
+//! handlers instead: WebKit exposes `navigator.mediaSession.callActionHandler`,
+//! and calling it from an isolated content world runs the handler the page
+//! registered (the same one its media keys use) without anything the page
+//! can observe. Handlers can't be listed, so skip controls appear when the
+//! page publishes now-playing metadata; an unregistered action is a no-op.
 use super::Event;
 use async_channel::Sender;
 use block2::RcBlock;
@@ -17,8 +24,8 @@ use objc2::{
     runtime::{AnyObject, Bool, NSObject, Sel},
     sel,
 };
-use objc2_foundation::NSString;
-use objc2_web_kit::WKWebView;
+use objc2_foundation::{NSError, NSString};
+use objc2_web_kit::{WKContentWorld, WKWebView};
 use std::ffi::c_void;
 
 const OBSERVED: [&str; 2] = ["_isPlayingAudio", "_hasActiveNowPlayingSession"];
@@ -75,7 +82,6 @@ impl Media {
             sel!(_mediaMutedState),
             sel!(_setPageMuted:),
             sel!(_playPredominantOrNowPlayingMediaSession:),
-            sel!(_nowPlayingMediaTitleAndArtist:),
         ]
         .into_iter()
         .all(|selector| responds(&view, selector));
@@ -146,22 +152,71 @@ impl Media {
             unsafe { msg_send![&*self.view, _playPredominantOrNowPlayingMediaSession: &*done] };
     }
 
-    /// Asks for the page's now-playing title and artist; the answer arrives
-    /// as `Event::MediaTitle`.
-    pub fn request_title(&self, id: u64, events: Sender<Event>) {
-        if self.observer.is_none() {
-            return;
-        }
-        let reply = RcBlock::new(move |title: *mut NSString, artist: *mut NSString| {
-            let text = |value: *mut NSString| {
-                unsafe { value.as_ref() }
-                    .map(|value| value.to_string())
-                    .filter(|value| !value.trim().is_empty())
+    /// Reads the page's Media Session metadata: the title and artist macOS
+    /// Now Playing shows, and whether next/previous are worth offering. The
+    /// answer arrives as `Event::MediaSession`. WebKit's own now-playing title
+    /// SPI and metadata observer proved unreliable outside Safari.
+    pub fn request_session(&self, id: u64, events: Sender<Event>) {
+        let reply = RcBlock::new(move |value: *mut AnyObject, _: *mut NSError| {
+            let json = unsafe { value.as_ref() }
+                .and_then(|value| value.downcast_ref::<NSString>())
+                .map(|value| value.to_string())
+                .filter(|json| json.len() <= 4096)
+                .unwrap_or_default();
+            let found: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+            let text = |field: &str| {
+                found[field]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
                     .map(|value| value.chars().take(200).collect())
             };
-            let _ = events.try_send(Event::MediaTitle(id, text(title), text(artist)));
+            let _ = events.try_send(Event::MediaSession {
+                id,
+                session: found["session"].as_bool().unwrap_or(false),
+                title: text("title"),
+                artist: text("artist"),
+            });
         });
-        let _: () = unsafe { msg_send![&*self.view, _nowPlayingMediaTitleAndArtist: &*reply] };
+        self.run(
+            "(() => { const m = navigator.mediaSession?.metadata; \
+             return JSON.stringify({session: !!m, title: m?.title ?? '', artist: m?.artist ?? ''}); })()",
+            Some(&reply),
+        );
+    }
+
+    pub fn skip(&self, forward: bool) {
+        let action = if forward {
+            "nexttrack"
+        } else {
+            "previoustrack"
+        };
+        self.run(
+            &format!("navigator.mediaSession?.callActionHandler({{action: '{action}'}})"),
+            None,
+        );
+    }
+
+    fn run(
+        &self,
+        script: &str,
+        reply: Option<&block2::Block<dyn Fn(*mut AnyObject, *mut NSError)>>,
+    ) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        // Isolated from the page's globals, but sharing its DOM and session.
+        let world =
+            unsafe { WKContentWorld::worldWithName(&NSString::from_str("Browser Media"), mtm) };
+        unsafe {
+            self.view
+                .evaluateJavaScript_inFrame_inContentWorld_completionHandler(
+                    &NSString::from_str(script),
+                    None,
+                    &world,
+                    reply,
+                );
+        }
     }
 }
 

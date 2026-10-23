@@ -23,7 +23,9 @@ gpui::assets::icon_assets!(
         Play,
         Pause,
         Volume2,
-        VolumeX
+        VolumeX,
+        SkipBack,
+        SkipForward
     ]
 );
 

@@ -9,8 +9,13 @@ pub enum Event {
     QuitRequested,
     /// A page started or stopped playing audio or a media session.
     MediaChanged(u64),
-    /// The now-playing title and artist for a page, when it has them.
-    MediaTitle(u64, Option<String>, Option<String>),
+    /// A page's Media Session metadata, if it publishes one.
+    MediaSession {
+        id: u64,
+        session: bool,
+        title: Option<String>,
+        artist: Option<String>,
+    },
     NavigationDecision {
         id: u64,
         reply: Sender<bool>,
@@ -222,9 +227,16 @@ impl Page {
         self.media.pause();
     }
 
-    pub fn request_media_title(&self, id: u64, events: Sender<Event>) {
+    pub fn skip_track(&self, forward: bool) {
         #[cfg(target_os = "macos")]
-        self.media.request_title(id, events);
+        self.media.skip(forward);
+        #[cfg(not(target_os = "macos"))]
+        let _ = forward;
+    }
+
+    pub fn request_media_session(&self, id: u64, events: Sender<Event>) {
+        #[cfg(target_os = "macos")]
+        self.media.request_session(id, events);
         #[cfg(not(target_os = "macos"))]
         let _ = (id, events);
     }

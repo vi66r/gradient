@@ -278,6 +278,16 @@ impl Browser {
                         .text_color(rgb(p.muted))
                         .child(label),
                 )
+                .when(media.skips, |strip| {
+                    strip.child(
+                        icon_button("media-previous", "Previous track", IconName::SkipBack, p)
+                            .size(px(24.))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.skip_track(id, false, cx);
+                            })),
+                    )
+                })
                 .child(
                     icon_button(
                         "media-play",
@@ -295,6 +305,16 @@ impl Browser {
                         this.toggle_media_playback(id, cx);
                     })),
                 )
+                .when(media.skips, |strip| {
+                    strip.child(
+                        icon_button("media-next", "Next track", IconName::SkipForward, p)
+                            .size(px(24.))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.skip_track(id, true, cx);
+                            })),
+                    )
+                })
                 .child(
                     icon_button(
                         "media-mute",
