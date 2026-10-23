@@ -3,6 +3,85 @@ use serde::{Deserialize, Serialize};
 
 pub const START: &str = "browser://start";
 
+/// Longest app link handed to another app. Real `mailto:`/meeting links are far
+/// shorter; a cap keeps a page from pushing megabytes through LaunchServices.
+pub const APP_LINK_MAX: usize = 8 * 1024;
+
+/// How a URL scheme is treated when a page or the address field asks for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scheme {
+    /// Loaded in the page (HTTP and HTTPS).
+    Web,
+    /// Belongs to another app (`mailto:`, `tel:`, `zoommtg:`…); handed to
+    /// macOS after the user confirms.
+    App,
+    /// Engine-internal, local or system schemes. Never handed to another app.
+    Never,
+}
+
+pub fn scheme(scheme: &str) -> Scheme {
+    let scheme = scheme.to_ascii_lowercase();
+    let valid = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    match scheme.as_str() {
+        "http" | "https" => Scheme::Web,
+        _ if !valid => Scheme::Never,
+        // Page machinery and local content.
+        "about" | "blob" | "data" | "file" | "javascript" | "browser"
+        // Script and system-settings handlers.
+        | "applescript" | "help" | "x-man-page" | "itms-services"
+        // Mounting network volumes or opening shells can leak credentials or
+        // run commands chosen by the page.
+        | "smb" | "afp" | "nfs" | "cifs" | "ftp" | "ftps" | "sftp" | "ssh" | "telnet" | "vnc" => {
+            Scheme::Never
+        }
+        _ if scheme.starts_with("x-apple") => Scheme::Never,
+        _ => Scheme::App,
+    }
+}
+
+/// What the address field should do with what was typed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Entry {
+    /// Load this address (or the start screen) in the tab.
+    Web(String),
+    /// Ask before handing this link to the app macOS has registered for it.
+    App(url::Url),
+}
+
+/// Address-field input: app links (`mailto:a@b.com`, `tel:+1555…`) are offered
+/// to another app; everything else follows [`destination`], including search.
+pub fn entry(input: &str) -> Result<Entry> {
+    match app_link(input) {
+        Some(url) => Ok(Entry::App(url)),
+        None => destination(input).map(Entry::Web),
+    }
+}
+
+/// `scheme:rest` input for an app scheme. `example.com:8080` and
+/// `localhost:5173` are hosts with ports, and text with spaces is a search.
+fn app_link(input: &str) -> Option<url::Url> {
+    let input = input.trim();
+    let (name, rest) = input.split_once(':')?;
+    if input.chars().any(char::is_whitespace)
+        || input.len() > APP_LINK_MAX
+        || scheme(name) != Scheme::App
+        || name.contains('.')
+        || name.eq_ignore_ascii_case("localhost")
+        || rest.is_empty()
+        || is_port(rest.split(['/', '?', '#']).next()?)
+    {
+        return None;
+    }
+    url::Url::parse(input).ok()
+}
+
+fn is_port(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Only explicit network navigation and our own start screen are accepted.
 /// In particular, pasting JavaScript, file URLs, or credentials must not execute
 /// code, expose local files, or persist a password in the session snapshot.
@@ -154,6 +233,83 @@ mod tests {
             assert!(destination(input).is_err(), "accepted {input}");
             assert!(!allowed_navigation(input));
         }
+    }
+
+    #[test]
+    fn schemes_are_classified_for_app_handoff() {
+        for web in ["http", "https", "HTTPS"] {
+            assert_eq!(scheme(web), Scheme::Web, "{web}");
+        }
+        for app in [
+            "mailto", "tel", "sms", "facetime", "maps", "zoommtg", "slack", "spotify", "vscode",
+            "msteams", "MAILTO",
+        ] {
+            assert_eq!(scheme(app), Scheme::App, "{app}");
+        }
+        for never in [
+            "file",
+            "javascript",
+            "JavaScript",
+            "data",
+            "blob",
+            "about",
+            "browser",
+            "applescript",
+            "x-apple.systempreferences",
+            "x-apple-helpbasic",
+            "x-man-page",
+            "smb",
+            "",
+            "1tel",
+            "ma il",
+        ] {
+            assert_eq!(scheme(never), Scheme::Never, "{never}");
+        }
+    }
+
+    #[test]
+    fn address_entries_offer_app_links_and_keep_search_and_hosts() {
+        let app = |input: &str| match entry(input).unwrap_or_else(|e| panic!("{input}: {e}")) {
+            Entry::App(url) => url.to_string(),
+            Entry::Web(url) => panic!("{input} became {url}"),
+        };
+        let web = |input: &str| match entry(input).unwrap_or_else(|e| panic!("{input}: {e}")) {
+            Entry::Web(url) => url,
+            Entry::App(url) => panic!("{input} offered to an app as {url}"),
+        };
+        assert_eq!(
+            app(" mailto:someone@example.com "),
+            "mailto:someone@example.com"
+        );
+        assert_eq!(app("tel:+15551234567"), "tel:+15551234567");
+        assert_eq!(
+            app("zoommtg://zoom.us/join?confno=1"),
+            "zoommtg://zoom.us/join?confno=1"
+        );
+        assert_eq!(web("https://example.com"), "https://example.com/");
+        assert_eq!(web("example.com:8080/a"), "https://example.com:8080/a");
+        assert_eq!(web("localhost:5173"), "http://localhost:5173/");
+        assert_eq!(web(""), START);
+        for search in ["hello world", "what is: a colon", "3D tools & things"] {
+            assert!(
+                web(search).starts_with("https://duckduckgo.com/?q="),
+                "{search}"
+            );
+        }
+        for never in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "data:text/html,hello",
+            "x-apple.systempreferences:com.apple.preference.security",
+            "applescript://com.apple.scripteditor?action=new",
+        ] {
+            assert!(entry(never).is_err(), "accepted {never}");
+        }
+        let long = format!("mailto:a@example.com?body={}", "x".repeat(APP_LINK_MAX));
+        assert!(
+            !matches!(entry(&long), Ok(Entry::App(_))),
+            "uncapped app link"
+        );
     }
 
     #[test]
