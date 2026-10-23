@@ -160,7 +160,7 @@ impl Browser {
                 url.len() <= 8192 && mcp::origin(url).as_ref() == Some(&origin),
                 "Navigation must stay within the shared origin"
             );
-            page.raw.load_url(url)?;
+            page.load_url(url)?;
             tab.revision = tab.revision.wrapping_add(1);
             return Ok(Some(
                 json!({"navigation_requested":true,"confirmation_may_be_required":true}),

@@ -66,6 +66,14 @@ impl Drop for Page {
 }
 
 impl Page {
+    /// Loads an address on the browser's behalf (address field, agent). Only
+    /// these loads, Back/Forward and Reload pass through the work guard.
+    pub fn load_url(&self, url: &str) -> wry::Result<()> {
+        #[cfg(target_os = "macos")]
+        self._protection.expect_shell_navigation();
+        self.raw.load_url(url)
+    }
+
     pub fn navigation_pending(&self) -> bool {
         #[cfg(target_os = "macos")]
         {

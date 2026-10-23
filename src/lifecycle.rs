@@ -63,27 +63,27 @@ impl Discard {
             Self::CloseTabs { .. } => (
                 "Close these tabs?",
                 "Close tabs",
-                "Unsaved forms, calls, and other live page state in these tabs will be lost. Reopening restores addresses only. Private tabs cannot be reopened.",
+                "Some of these tabs have edits you haven’t saved. Closing discards them; reopening restores addresses only, and private tabs can’t be reopened.",
             ),
             Self::Close(_) => (
                 "Close this tab?",
                 "Close tab",
-                "Unsaved forms, calls, and other live page state will be lost. Reopening a tab restores its address only. Private tabs cannot be reopened.",
+                "This page has edits you haven’t saved. Closing discards them; reopening restores the address only, and private tabs can’t be reopened.",
             ),
             Self::Suspend(_) => (
                 "Suspend this tab?",
                 "Suspend",
-                "Unsaved forms, calls, and other live page state will be lost. Resuming reloads the address only.",
+                "This page has edits you haven’t saved. Suspending discards them; resuming reloads the address.",
             ),
             Self::Start(_) => (
                 "Return to the start page?",
                 "Leave page",
-                "Unsaved forms, calls, and other live page state will be lost. Open a new tab instead to keep this page.",
+                "This page has edits you haven’t saved. Open a new tab instead to keep them.",
             ),
             Self::Quit => (
                 "Quit Browser?",
                 "Quit Browser",
-                "Unsaved forms, calls, and other live page state will be lost in all tabs. Only normal tab addresses are restored next time. Private tabs and Request Lab drafts are not saved.",
+                "Some tabs have edits you haven’t saved. Quitting discards them. Tab addresses are restored next time, except private tabs; Request Lab drafts aren’t saved.",
             ),
         }
     }

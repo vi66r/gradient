@@ -444,7 +444,7 @@ impl Browser {
         if url != START
             && let Some(page) = &tab.page
         {
-            if let Err(error) = page.raw.load_url(&url) {
+            if let Err(error) = page.load_url(&url) {
                 tab.error = Some(error.to_string());
             }
             // Keep the committed address, title, and grant until WebKit commits.
@@ -471,7 +471,7 @@ impl Browser {
             tab.page = None;
             tab.loading = false;
         } else if let Some(page) = &tab.page {
-            if let Err(error) = page.raw.load_url(&url) {
+            if let Err(error) = page.load_url(&url) {
                 tab.error = Some(error.to_string());
             }
         } else {
@@ -743,7 +743,7 @@ impl Browser {
                     .map(|tab| model::display_host(&tab.saved.url))
                     .unwrap_or_default();
                 let detail = format!(
-                    "{host} may have unsaved edits, active media, or content Browser could not check. Leaving may discard that work."
+                    "{host} has edits you haven’t saved, or you were working in content Browser can’t check. Leaving may discard them."
                 );
                 let answer = window.prompt(
                     PromptLevel::Warning,
@@ -1029,7 +1029,7 @@ impl Browser {
                 let expected = self.live_pages(&action);
                 self.discard_pending = true;
                 let detail = format!(
-                    "{}\n\nQuit anyway? The current tab addresses will not be saved, and live page state and Request Lab drafts will be lost.",
+                    "{}\n\nQuit anyway? The current tab addresses won’t be saved, and unsaved page edits and Request Lab drafts will be lost.",
                     self.notice
                         .as_deref()
                         .unwrap_or("Session could not be saved.")

@@ -9,7 +9,7 @@ use objc2::{
 use objc2_foundation::{NSError, NSString};
 use objc2_web_kit::{
     WKContentWorld, WKFrameInfo, WKNavigation, WKNavigationAction, WKNavigationActionPolicy,
-    WKNavigationDelegate, WKUserScript, WKUserScriptInjectionTime, WKWebView,
+    WKNavigationDelegate, WKNavigationType, WKUserScript, WKUserScriptInjectionTime, WKWebView,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -74,6 +74,9 @@ pub struct Ivars {
     background: gpui::BackgroundExecutor,
     busy: Rc<Cell<bool>>,
     approved: Rc<RefCell<Option<WorkState>>>,
+    /// Set just before the shell (address field, agent) loads a URL, so that
+    /// main-frame decision is guarded while the page's own loads are not.
+    shell: Cell<bool>,
 }
 
 // Every retained WebKit decision must complete exactly once, even when its
@@ -114,8 +117,17 @@ define_class!(
         #[unsafe(method(webView:decidePolicyForNavigationAction:decisionHandler:))]
         unsafe fn decide(&self, view: &WKWebView, action: &WKNavigationAction, handler: &Block<dyn Fn(WKNavigationActionPolicy)>) {
             let state = self.ivars();
-            // A new window does not replace this page; keep Wry's popup policy.
+            // Only the browser discarding a page needs a guard: Back/Forward
+            // (buttons, keys, swipes), Reload, and shell-loaded addresses, in
+            // the main frame. A page's own links, redirects and subframe loads
+            // are the page's business and must never wait on a probe, prompt,
+            // or be cancelled because another check is running. A new window
+            // does not replace this page; keep Wry's popup policy.
             let frame = unsafe { action.targetFrame() };
+            let main = frame.as_ref().is_some_and(|frame| unsafe { frame.isMainFrame() });
+            let kind = unsafe { action.navigationType() };
+            let shell = main && state.shell.replace(false);
+            let browser = shell || kind == WKNavigationType::BackForward || kind == WKNavigationType::Reload;
             let initial = unsafe { view.URL() }.is_none_or(|url| url.absoluteString().is_none_or(|url| url.to_string() == "about:blank"));
             let frame_url = frame.as_ref().and_then(|frame| unsafe { frame.request().URL() }).and_then(|url| url.absoluteString()).map(|url| url.to_string());
             let target_url = unsafe { action.request().URL() }.and_then(|url| url.absoluteString()).map(|url| url.to_string());
@@ -123,7 +135,7 @@ define_class!(
                 (Some(from), Some(to)) => from != to && from.split('#').next() == to.split('#').next(),
                 _ => false,
             };
-            if frame.is_none() || initial || frame_url.as_deref() == Some("about:blank") || same_document {
+            if !main || !browser || initial || frame_url.as_deref() == Some("about:blank") || same_document {
                 unsafe { state.original.webView_decidePolicyForNavigationAction_decisionHandler(view, action, handler); }
                 return;
             }
@@ -189,6 +201,10 @@ impl Protection {
         self.ivars().busy.get()
     }
 
+    pub fn expect_shell_navigation(&self) {
+        self.ivars().shell.set(true);
+    }
+
     pub fn install(
         view: &WKWebView,
         id: u64,
@@ -217,6 +233,7 @@ impl Protection {
                 background: cx.background_executor().clone(),
                 busy: Rc::new(Cell::new(false)),
                 approved: Rc::new(RefCell::new(None)),
+                shell: Cell::new(false),
             });
             let delegate: Retained<Self> = msg_send![super(object), init];
             view.setNavigationDelegate(Some(ProtocolObject::from_ref(&*delegate)));
