@@ -158,7 +158,12 @@ impl crate::Browser {
         path: PathBuf,
         cx: &mut gpui::Context<Self>,
     ) {
-        let tab = self.popups.get(&tab).copied().unwrap_or(tab);
+        let popup = tab;
+        let tab = self.popups.get(&popup).copied().unwrap_or(popup);
+        // A popup that closed to hand its download back is done with.
+        if !self.tabs.iter().any(|candidate| candidate.id == popup) {
+            self.popups.remove(&popup);
+        }
         // A tab that's already gone can't vouch that it was normal.
         let private = self
             .tabs
@@ -298,6 +303,9 @@ impl crate::Browser {
             if !private {
                 self.closed.pop();
             }
+            // WebKit names the download's destination after this, and
+            // `download_started` still needs to find the opener.
+            self.popups.insert(id, opener);
             return;
         }
         let tab = &mut self.tabs[index];
