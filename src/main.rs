@@ -967,6 +967,42 @@ impl Browser {
         cx.notify();
     }
 
+    /// Samples the page's top edge as loading ends and over the next few
+    /// seconds, so apps that open on a splash screen (Gmail) end up with their
+    /// real color. Stops early if the tab closes, suspends or navigates.
+    fn sample_theme_after_load(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(revision) = self
+            .tabs
+            .iter()
+            .find(|tab| tab.id == id)
+            .map(|tab| tab.revision)
+        else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let mut elapsed = 0;
+            for at in [0, 700, 2000, 4500] {
+                cx.background_executor()
+                    .timer(Duration::from_millis(at - elapsed))
+                    .await;
+                elapsed = at;
+                let current = this
+                    .update(cx, |this, _| {
+                        let tab = this.tabs.iter().find(|tab| tab.id == id)?;
+                        let page = tab.page.as_ref().filter(|_| tab.revision == revision)?;
+                        page.sample_theme();
+                        Some(())
+                    })
+                    .ok()
+                    .flatten();
+                if current.is_none() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
     /// WebKit reports its default white for a moment after each commit, before
     /// the page's own background arrives; apply only colors that hold briefly
     /// so the strip doesn't flash on dark sites.
@@ -1120,14 +1156,16 @@ impl Browser {
             engine::Event::MediaChanged(id) => self.media_changed(id, cx),
             engine::Event::PageTint(id, tint) => self.settle_tint(id, tint, cx),
             engine::Event::Committed(id) => {
-                if !cx.reduce_motion()
-                    && let Some(page) = self
-                        .tabs
-                        .iter()
-                        .find(|tab| tab.id == id)
-                        .and_then(|tab| tab.page.as_ref())
+                if let Some(page) = self
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .and_then(|tab| tab.page.as_ref())
                 {
-                    page.fade_in();
+                    page.reset_theme();
+                    if !cx.reduce_motion() {
+                        page.fade_in();
+                    }
                 }
             }
             engine::Event::MediaSession { id, session } => {
@@ -1162,6 +1200,7 @@ impl Browser {
                     }
                     if !loading {
                         self.request_icon(index);
+                        self.sample_theme_after_load(id, cx);
                     }
                     if index == self.active
                         && !self.address.read(cx).focus_handle(cx).is_focused(window)

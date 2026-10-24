@@ -394,6 +394,18 @@ impl Page {
         let _ = color;
     }
 
+    /// A new document committed: drop the previous page's edge sample.
+    pub fn reset_theme(&self) {
+        #[cfg(target_os = "macos")]
+        self._theme.reset();
+    }
+
+    /// Samples the page's top edge for the strip (`Event::PageTint`).
+    pub fn sample_theme(&self) {
+        #[cfg(target_os = "macos")]
+        self._theme.sample();
+    }
+
     /// Fades a newly committed document in.
     pub fn fade_in(&self) {
         #[cfg(target_os = "macos")]
