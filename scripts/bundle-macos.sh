@@ -24,6 +24,10 @@ cat > "$bundle/Contents/Info.plist" <<'PLIST'
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSCameraUsageDescription</key><string>Websites you allow can use the camera.</string>
+<key>NSMicrophoneUsageDescription</key><string>Websites you allow can use the microphone.</string>
+<key>NSLocationUsageDescription</key><string>Websites you allow can use your location.</string>
+<key>NSLocationWhenInUseUsageDescription</key><string>Websites you allow can use your location.</string>
 <key>NSAppTransportSecurity</key><dict>
 <key>NSAllowsArbitraryLoadsInWebContent</key><true/>
 </dict>

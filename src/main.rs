@@ -8,6 +8,7 @@ mod http_client;
 mod lifecycle;
 mod mcp;
 mod model;
+mod permissions;
 mod session;
 mod ui;
 mod zoom;
@@ -42,6 +43,7 @@ actions!(
         PreviousTab,
         RequestLab,
         Inspect,
+        SitePermissions,
         Suspend,
         ToggleAgent,
         Find,
@@ -73,6 +75,40 @@ struct Tab {
     tint_epoch: u64,
     /// The page's zoom level, 1.0 at actual size; see `zoom::Zooms`.
     zoom: f64,
+    /// The tab whose page opened this one with `window.open`; it comes back
+    /// to the front when this page closes itself.
+    opener: Option<u64>,
+    /// Devices the user declined for the current document. Its later
+    /// requests are denied quietly; the next document may ask again.
+    declined: Vec<permissions::Kind>,
+}
+
+impl Tab {
+    fn new(id: u64, url: String, private: bool) -> Self {
+        Self {
+            id,
+            saved: SavedTab {
+                title: if url == START {
+                    "New tab".into()
+                } else {
+                    model::display_host(&url)
+                },
+                url,
+            },
+            private,
+            loading: false,
+            revision: 0,
+            media: None,
+            tint: None,
+            tint_epoch: 0,
+            page: None,
+            error: None,
+            grant: None,
+            zoom: 1.,
+            opener: None,
+            declined: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -121,7 +157,9 @@ struct Browser {
     context: wry::WebContext,
     profile: [u8; 16],
     active: usize,
-    next_id: u64,
+    ids: engine::Ids,
+    /// Remembered "Allow" answers, per profile and site; never for private tabs.
+    permissions: permissions::Store,
     closed: Vec<SavedTab>,
     address: Entity<InputState>,
     /// Find in page. The bar belongs to one tab (`finding`) and closes when
@@ -263,6 +301,8 @@ impl Browser {
                 page: None,
                 error: None,
                 grant: None,
+                opener: None,
+                declined: Vec::new(),
             })
             .collect();
         if tabs.is_empty() {
@@ -282,10 +322,13 @@ impl Browser {
                 page: None,
                 error: None,
                 grant: None,
+                opener: None,
+                declined: Vec::new(),
             });
         }
         let active = saved.active.min(tabs.len() - 1);
-        let next_id = tabs.len() as u64 + 1;
+        let ids = engine::Ids::new(std::cell::Cell::new(tabs.len() as u64 + 1));
+        let permissions = permissions::Store::open(store.dir());
         let icon_cache = favicon::DiskCache::new(store.dir());
         let zooms = zoom::Zooms::load(store.dir());
         let mut this = Self {
@@ -293,7 +336,8 @@ impl Browser {
             context: wry::WebContext::new(Some(session::data_dir().join("webkit"))),
             profile,
             active,
-            next_id,
+            ids,
+            permissions,
             closed: Vec::new(),
             address,
             find,
@@ -457,6 +501,7 @@ impl Browser {
                 url: &tab.saved.url,
                 private: tab.private,
                 profile: self.profile,
+                ids: &self.ids,
             },
             &mut self.context,
             self.events.clone(),
@@ -519,34 +564,10 @@ impl Browser {
             self.notice = Some("Tab limit reached.".into());
             return;
         }
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = engine::next_id(&self.ids);
         // Newest first: the sidebar reads top-down from what you just opened.
         let position = position.min(self.tabs.len());
-        self.tabs.insert(
-            position,
-            Tab {
-                id,
-                saved: SavedTab {
-                    title: if url == START {
-                        "New tab".into()
-                    } else {
-                        model::display_host(&url)
-                    },
-                    url,
-                },
-                private,
-                loading: false,
-                revision: 0,
-                media: None,
-                tint: None,
-                tint_epoch: 0,
-                zoom: 1.,
-                page: None,
-                error: None,
-                grant: None,
-            },
-        );
+        self.tabs.insert(position, Tab::new(id, url, private));
         self.activate(position, window, cx);
         if self.tabs[self.active].saved.url == START {
             self.focus_address(window, cx);
@@ -613,6 +634,204 @@ impl Browser {
                         this.notice = Some("The app didn’t open the link.".into());
                     }
                     None => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// A page WebKit opened. A `window.open` popup (a sign-in window) goes
+    /// right above its opener and hands the front back to it when it closes;
+    /// links open like any new tab. Both keep the opener's private store.
+    #[allow(clippy::too_many_arguments)]
+    fn opened(
+        &mut self,
+        opener: u64,
+        id: u64,
+        url: String,
+        popup: bool,
+        background: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Dropping the page closes WebKit's new window again.
+        let Some(page) = engine::take_opened(id) else {
+            return;
+        };
+        let Some(index) = self.tabs.iter().position(|tab| tab.id == opener) else {
+            return;
+        };
+        if self.tabs.len() >= 1000 {
+            self.notice = Some("Tab limit reached.".into());
+            return;
+        }
+        let private = self.tabs[index].private;
+        let position = if popup { index } else { 0 };
+        page.set_edge_color(ui::strip_color(None, self.dark));
+        let mut tab = Tab::new(id, url, private);
+        tab.page = Some(page);
+        tab.loading = true;
+        tab.revision = 1;
+        tab.opener = popup.then_some(opener);
+        self.tabs.insert(position, tab);
+        // Lets a page opened only to start a download hand it back.
+        self.popups.insert(id, opener);
+        if background {
+            if position <= self.active {
+                self.active += 1;
+            }
+            self.dirty = true;
+        } else {
+            self.activate(position, window, cx);
+        }
+    }
+
+    /// A page closed itself. WebKit allows that only in a window a script
+    /// opened or one with no history, so there is no draft check: the page
+    /// decided. A popup's opener comes back to the front.
+    fn page_closed(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self.tabs.iter().position(|tab| tab.id == id) else {
+            return;
+        };
+        let active = index == self.active;
+        let tab = self.tabs.remove(index);
+        if self.tabs.is_empty() {
+            self.new_tab(START.into(), false, window, cx);
+        } else if active {
+            let opener = tab
+                .opener
+                .and_then(|opener| self.tabs.iter().position(|tab| tab.id == opener));
+            let next = opener.unwrap_or(index.min(self.tabs.len() - 1));
+            self.activate(next, window, cx);
+        } else if index < self.active {
+            self.active -= 1;
+        }
+        drop(tab);
+        self.save();
+    }
+
+    /// A site asks for a device. A remembered "Allow" answers at once.
+    /// Otherwise only the frontmost tab asks, never over another dialog, with
+    /// "Don't Allow" as the default. A declined device stays quiet until the
+    /// tab's next document. Private tabs neither use nor keep grants.
+    fn permission(
+        &mut self,
+        id: u64,
+        site: String,
+        kinds: Vec<permissions::Kind>,
+        reply: async_channel::Sender<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.tabs.iter().position(|tab| tab.id == id) else {
+            return;
+        };
+        let tab = &self.tabs[index];
+        if !tab.private && self.permissions.allowed(&self.profile, &site, &kinds) {
+            let _ = reply.try_send(true);
+            return;
+        }
+        if self.discard_pending
+            || self.lab
+            || index != self.active
+            || kinds.iter().any(|kind| tab.declined.contains(kind))
+        {
+            return;
+        }
+        let remember = !tab.private && kinds.iter().all(|kind| kind.rememberable());
+        let detail = if tab.private {
+            Some("Private tabs don’t remember this choice.")
+        } else if remember {
+            Some("“Allow” remembers this for the site. Reset it in Tools ▸ Site Permissions.")
+        } else {
+            None
+        };
+        let mut buttons = vec![PromptButton::cancel("Don’t Allow")];
+        if remember {
+            buttons.push(PromptButton::new("Allow Once"));
+        }
+        buttons.push(PromptButton::new("Allow"));
+        self.discard_pending = true;
+        let answer = window.prompt(
+            PromptLevel::Info,
+            &permissions::question(&site, &kinds),
+            detail,
+            &buttons,
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.await.ok();
+            let _ = this.update_in(cx, |this, _, cx| {
+                this.discard_pending = false;
+                let allow = answer.is_some_and(|answer| answer > 0);
+                if !allow && let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == id) {
+                    tab.declined.extend(kinds.iter().copied());
+                }
+                if remember
+                    && answer == Some(2)
+                    && let Err(error) = this.permissions.allow(&this.profile, &site, &kinds)
+                {
+                    this.notice = Some(error.to_string());
+                }
+                let _ = reply.try_send(allow);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Tools ▸ Site Permissions: shows what the current site may use and
+    /// forgets it on request, stopping any capture it has running.
+    fn site_permissions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = &self.tabs[self.active];
+        let Some(site) = mcp::origin(&tab.saved.url) else {
+            self.notice = Some("Only websites can have site permissions.".into());
+            cx.notify();
+            return;
+        };
+        let host = model::display_host(&site);
+        if tab.private {
+            self.notice = Some("Private tabs don’t keep site permissions.".into());
+            cx.notify();
+            return;
+        }
+        let granted = self.permissions.site(&self.profile, &site);
+        if granted.is_empty() {
+            self.notice = Some(format!("{host} has no saved permissions."));
+            cx.notify();
+            return;
+        }
+        if self.discard_pending {
+            return;
+        }
+        self.discard_pending = true;
+        let answer = window.prompt(
+            PromptLevel::Info,
+            &format!("Reset permissions for “{host}”?"),
+            Some(&format!(
+                "Allowed: {}. The site will ask again next time.",
+                permissions::summary(&granted)
+            )),
+            &["Cancel", "Reset"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let confirmed = answer.await == Ok(1);
+            let _ = this.update_in(cx, |this, _, cx| {
+                this.discard_pending = false;
+                if !confirmed {
+                    return;
+                }
+                if let Err(error) = this.permissions.forget(&this.profile, &site) {
+                    this.notice = Some(error.to_string());
+                }
+                for tab in this.tabs.iter().filter(|tab| !tab.private) {
+                    if let Some(page) = &tab.page
+                        && mcp::origin(&tab.saved.url).as_ref() == Some(&site)
+                    {
+                        page.stop_capture();
+                    }
                 }
                 cx.notify();
             });
@@ -1235,6 +1454,9 @@ impl Browser {
                         page.end_find();
                     }
                 }
+                if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
+                    tab.declined.clear();
+                }
                 if let Some(page) = self
                     .tabs
                     .iter()
@@ -1294,11 +1516,25 @@ impl Browser {
                     }
                 }
             }
+            engine::Event::Opened {
+                opener,
+                id,
+                url,
+                popup,
+                background,
+            } => self.opened(opener, id, url, popup, background, window, cx),
+            engine::Event::Closed(id) => self.page_closed(id, window, cx),
+            engine::Event::Permission {
+                id,
+                site,
+                kinds,
+                reply,
+            } => self.permission(id, site, kinds, reply, window, cx),
             engine::Event::NewTab(id, url) => {
                 if let Some(tab) = self.tabs.iter().find(|tab| tab.id == id) {
-                    let popup = self.next_id;
+                    let popup = self.ids.get();
                     self.new_tab(url, tab.private, window, cx);
-                    if self.next_id > popup {
+                    if self.ids.get() > popup {
                         self.popups.insert(popup, id);
                     }
                 }
@@ -1935,6 +2171,7 @@ fn main() -> anyhow::Result<()> {
             Menu::new("Tools").items([
                 MenuItem::action("Request Lab", RequestLab),
                 MenuItem::action("Inspect Page", Inspect),
+                MenuItem::action("Site Permissions…", SitePermissions),
                 MenuItem::action("Suspend Current Tab…", Suspend),
                 MenuItem::action("Share / Revoke Agent Access…", ToggleAgent),
             ]),

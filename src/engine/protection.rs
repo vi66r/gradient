@@ -450,7 +450,15 @@ impl Protection {
         *self.ivars().file.borrow_mut() = Some(path);
     }
 
-    pub fn install(view: &WKWebView, policy: Policy, cx: &gpui::App) -> Retained<Self> {
+    /// `inherited`: the view shares an opener's content controller, which
+    /// already carries the probe script.
+    pub fn install(
+        view: &WKWebView,
+        policy: Policy,
+        inherited: bool,
+        foreground: gpui::ForegroundExecutor,
+        background: gpui::BackgroundExecutor,
+    ) -> Retained<Self> {
         let Policy {
             id,
             events,
@@ -459,16 +467,19 @@ impl Protection {
         } = policy;
         let mtm = MainThreadMarker::new().unwrap();
         unsafe {
-            let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
-                WKUserScript::alloc(mtm),
-                &NSString::from_str(include_str!("work-state.js")),
-                WKUserScriptInjectionTime::AtDocumentStart,
-                false,
-                &world(),
-            );
-            view.configuration()
-                .userContentController()
-                .addUserScript(&script);
+            if !inherited {
+                let script =
+                    WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
+                        WKUserScript::alloc(mtm),
+                        &NSString::from_str(include_str!("work-state.js")),
+                        WKUserScriptInjectionTime::AtDocumentStart,
+                        false,
+                        &world(),
+                    );
+                view.configuration()
+                    .userContentController()
+                    .addUserScript(&script);
+            }
             let object = Self::alloc(mtm).set_ivars(Ivars {
                 original: view
                     .navigationDelegate()
@@ -478,8 +489,8 @@ impl Protection {
                 file_gate,
                 dropped,
                 file: RefCell::new(None),
-                foreground: cx.foreground_executor().clone(),
-                background: cx.background_executor().clone(),
+                foreground,
+                background,
                 busy: Rc::new(Cell::new(false)),
                 approved: Rc::new(RefCell::new(None)),
                 shell: Cell::new(false),

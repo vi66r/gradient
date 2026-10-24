@@ -1,0 +1,42 @@
+<!doctype html><meta charset="utf-8"><title>Popups and permissions</title><link rel="icon" href="/icon.svg" type="image/svg+xml">
+<style>
+body{font:16px system-ui;margin:0;background:#fafbff;color:#283146}main{max-width:650px;margin:48px auto}h1{font-size:32px;font-weight:500}button,a{display:inline-block;margin:8px 8px 8px 0;padding:10px 14px}button{border:0;background:#456ae6;color:white;border-radius:8px}output{display:block;font:14px ui-monospace,monospace;margin:4px 0 16px;white-space:pre-wrap}iframe{width:100%;height:90px;border:1px solid #bdc7dd;border-radius:8px}
+</style>
+<main><h1>Popups and permissions</h1>
+<h2>Popups</h2>
+<button id="sign-in">Sign in with popup</button><button id="late">Open a popup in 3 s (no click)</button><a id="link" href="/next" target="_blank">Link in a new tab</a>
+<output id="popup">No popup yet.</output>
+<h2>Devices</h2>
+<button id="av">Camera and microphone</button><button id="mic">Microphone</button><button id="geo">Location</button><button id="screen">Screen</button>
+<output id="devices">Nothing asked yet.</output>
+<p>An embedded frame from another origin (it should be refused without a prompt):</p>
+<iframe id="frame" allow="camera; microphone; geolocation"></iframe>
+<output id="storage"></output></main>
+<script>
+const say=(id,text)=>document.getElementById(id).textContent=text;
+localStorage.setItem('sitesVisits',Number(localStorage.getItem('sitesVisits')||0)+1);
+say('storage','Visits in this website data store: '+localStorage.getItem('sitesVisits'));
+let popup=null;
+addEventListener('message',event=>{if(event.source===popup)say('popup','Popup said: '+JSON.stringify(event.data)+' from '+event.origin);});
+document.getElementById('sign-in').onclick=()=>{
+  popup=window.open('/sign-in','sign-in','width=480,height=640');
+  say('popup',popup?'Popup open, waiting for it…':'Popup was blocked.');
+  const watch=setInterval(()=>{if(popup&&popup.closed){clearInterval(watch);document.getElementById('popup').textContent+=' Popup closed.';}},250);
+};
+document.getElementById('late').onclick=()=>setTimeout(()=>{const late=window.open('/sign-in','late');say('popup',late?'Unrequested popup opened (should not happen).':'Unrequested popup was blocked.');},3000);
+const media=async(id,constraints,display)=>{
+  say('devices','Asking for '+id+'…');
+  try{const stream=await(display?navigator.mediaDevices.getDisplayMedia(constraints):navigator.mediaDevices.getUserMedia(constraints));
+    say('devices',id+': allowed, '+stream.getTracks().map(t=>t.kind+' '+t.readyState).join(', '));
+    window.streams=(window.streams||[]).concat(stream);
+    stream.getTracks().forEach(t=>t.onended=()=>document.getElementById('devices').textContent+=' ('+t.kind+' ended)');
+  }catch(error){say('devices',id+': '+error.name+' '+error.message);}
+};
+document.getElementById('av').onclick=()=>media('camera and microphone',{video:true,audio:true});
+document.getElementById('mic').onclick=()=>media('microphone',{audio:true});
+document.getElementById('screen').onclick=()=>media('screen',{video:true},true);
+document.getElementById('geo').onclick=()=>{say('devices','Asking for location…');navigator.geolocation.getCurrentPosition(p=>say('devices','location: allowed, ±'+Math.round(p.coords.accuracy)+' m'),e=>say('devices','location: error '+e.code+' '+e.message),{timeout:20000});};
+// The same server under its other loopback name is a different origin.
+const other=location.hostname==='localhost'?'127.0.0.1':'localhost';
+document.getElementById('frame').src=location.protocol+'//'+other+':'+location.port+'/framed';
+</script>

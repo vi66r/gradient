@@ -1031,6 +1031,7 @@ impl Render for Browser {
             .on_action(cx.listener(|this, _: &ActualSize, _, cx| this.zoom_by(None, cx)))
             .on_action(cx.listener(|this, _: &Print, _, _| this.print()))
             .on_action(cx.listener(|this, _: &Suspend, w, cx| this.suspend(w, cx)))
+            .on_action(cx.listener(|this, _: &SitePermissions, w, cx| this.site_permissions(w, cx)))
             .on_action(cx.listener(|this, _: &ToggleAgent, w, cx| this.toggle_agent(w, cx)))
             .on_action(cx.listener(|this, _: &Quit, w, cx| {
                 this.request_discard(lifecycle::Discard::Quit, w, cx);

@@ -60,8 +60,32 @@ pub enum Event {
         id: u64,
         empty: bool,
     },
+    /// A site asks to use the camera, microphone, screen or location. Reply
+    /// `true` to allow; dropping `reply` denies.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Permission {
+        id: u64,
+        site: String,
+        kinds: Vec<crate::permissions::Kind>,
+        reply: Sender<bool>,
+    },
+    /// A page opened another through WebKit (`window.open`, `target=_blank`):
+    /// take its page with `take_opened(id)`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Opened {
+        opener: u64,
+        id: u64,
+        url: String,
+        popup: bool,
+        background: bool,
+    },
+    /// A page closed itself (`window.close()`; WebKit allows it in a window
+    /// a script opened, or one with no history).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Closed(u64),
     Title(u64, String),
     Loading(u64, bool, String),
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     NewTab(u64, String),
     /// Local files dropped on a page, as file URLs, to open in new tabs.
     OpenFiles(u64, Vec<String>),
@@ -176,6 +200,177 @@ pub struct PageOptions<'a> {
     pub url: &'a str,
     pub private: bool,
     pub profile: [u8; 16],
+    /// Tab IDs, shared with the engine so pages a page opens get one too.
+    pub ids: &'a Ids,
+}
+
+/// The next free tab ID. Tabs and the pages WebKit opens draw from one counter.
+pub type Ids = Rc<Cell<u64>>;
+
+pub fn next_id(ids: &Ids) -> u64 {
+    let id = ids.get();
+    ids.set(id + 1);
+    id
+}
+
+/// What a page needs to build the pages it opens. WebKit asks for a popup's
+/// view synchronously, outside any GPUI update, so this carries what
+/// `Page::create` otherwise takes from the window and app.
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+struct Host {
+    events: Sender<Event>,
+    ids: Ids,
+    foreground: gpui::ForegroundExecutor,
+    background: gpui::BackgroundExecutor,
+    parent: Parent,
+}
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    /// Pages WebKit opened, until the shell takes them into a tab.
+    static OPENED: std::cell::RefCell<std::collections::HashMap<u64, Rc<Page>>> =
+        Default::default();
+}
+
+/// The page WebKit opened for `Event::Opened`.
+pub fn take_opened(id: u64) -> Option<Rc<Page>> {
+    #[cfg(target_os = "macos")]
+    {
+        OPENED.with(|opened| opened.borrow_mut().remove(&id))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = id;
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Host {
+    fn open(
+        &self,
+        opener: u64,
+        private: bool,
+        profile: [u8; 16],
+        configuration: &objc2_web_kit::WKWebViewConfiguration,
+        opening: site::Opening,
+    ) -> Option<objc2::rc::Retained<objc2_web_kit::WKWebView>> {
+        use wry::WebViewExtMacOS;
+        let id = next_id(&self.ids);
+        // WebKit requires the returned view to use exactly this configuration.
+        let page = match Page::build(
+            id,
+            private,
+            profile,
+            Some(objc2::Message::retain(configuration)),
+            self,
+        ) {
+            Ok(page) => page,
+            Err(error) => {
+                log::error!("Opening a page: {error}");
+                return None;
+            }
+        };
+        let view = objc2::rc::Retained::into_super(page.raw.webview());
+        OPENED.with(|opened| opened.borrow_mut().insert(id, page));
+        let event = Event::Opened {
+            opener,
+            id,
+            url: opening.url,
+            popup: opening.popup,
+            background: opening.background,
+        };
+        if self.events.try_send(event).is_err() {
+            take_opened(id);
+            return None;
+        }
+        Some(view)
+    }
+}
+
+/// The GPUI window's view, as a Wry parent that outlives the call.
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+struct Parent(objc2::rc::Retained<objc2_app_kit::NSView>);
+
+#[cfg(target_os = "macos")]
+impl Parent {
+    fn of(window: &Window) -> anyhow::Result<Self> {
+        use wry::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let RawWindowHandle::AppKit(handle) = HasWindowHandle::window_handle(window)?.as_raw()
+        else {
+            anyhow::bail!("Browser needs an AppKit window.");
+        };
+        // The handle's view belongs to the window and is alive here.
+        let view = unsafe { handle.ns_view.cast::<objc2_app_kit::NSView>().as_ref() };
+        Ok(Self(objc2::Message::retain(view)))
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl wry::raw_window_handle::HasWindowHandle for Parent {
+    fn window_handle(
+        &self,
+    ) -> Result<wry::raw_window_handle::WindowHandle<'_>, wry::raw_window_handle::HandleError> {
+        use wry::raw_window_handle::{AppKitWindowHandle, RawWindowHandle, WindowHandle};
+        let handle = AppKitWindowHandle::new(std::ptr::NonNull::from(&*self.0).cast());
+        // The retained view outlives the borrow.
+        Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::AppKit(handle)) })
+    }
+}
+
+/// The handlers every page's Wry view gets, on every platform.
+fn handlers<'a>(
+    builder: wry::WebViewBuilder<'a>,
+    id: u64,
+    private: bool,
+    events: &Sender<Event>,
+    navigation_gate: FileGate,
+) -> wry::WebViewBuilder<'a> {
+    let title_events = events.clone();
+    let load_events = events.clone();
+    let navigation_events = events.clone();
+    let download_events = events.clone();
+    builder
+        .with_visible(false)
+        .with_focused(false)
+        .with_incognito(private)
+        .with_autoplay(false)
+        .with_devtools(true)
+        .with_back_forward_navigation_gestures(true)
+        .with_document_title_changed_handler(move |title| {
+            let _ = title_events.try_send(Event::Title(id, title.chars().take(200).collect()));
+        })
+        .with_on_page_load_handler(move |event, url| {
+            let _ = load_events.try_send(Event::Loading(
+                id,
+                matches!(event, wry::PageLoadEvent::Started),
+                url,
+            ));
+        })
+        .with_navigation_handler(move |url| {
+            if crate::model::is_file_url(&url) {
+                // Browser applied the file policy before admitting this.
+                return navigation_gate.replace(false);
+            }
+            let allowed = crate::model::allowed_navigation(&url);
+            if !allowed {
+                let _ = navigation_events.try_send(Event::Notice(
+                    "This prototype supports HTTP and HTTPS links only.".into(),
+                ));
+            }
+            allowed
+        })
+        // Registering a handler makes Wry answer WebKit with "download".
+        // On macOS, `Protection` then takes the download over (see
+        // `download.rs`), so this only runs elsewhere.
+        .with_download_started_handler(move |_, _| {
+            let _ = download_events.try_send(Event::Notice(
+                "Downloads are not available on this platform yet.".into(),
+            ));
+            false
+        })
 }
 
 #[cfg(target_os = "macos")]
@@ -196,6 +391,9 @@ pub struct Page {
     pub raw: wry::WebView,
     #[cfg(target_os = "macos")]
     _protection: objc2::rc::Retained<protection::Protection>,
+    /// Popups and site permission prompts (WebKit's UI delegate).
+    #[cfg(target_os = "macos")]
+    _site: objc2::rc::Retained<site::Site>,
     #[cfg(not(target_os = "macos"))]
     file_gate: FileGate,
     #[cfg(target_os = "macos")]
@@ -300,42 +498,33 @@ impl Page {
             url,
             private,
             profile,
+            ids,
         } = options;
-        let protection_events = events.clone();
-        let media_events = events.clone();
-        let title_events = events.clone();
-        let load_events = events.clone();
-        let popup_events = events.clone();
-        let navigation_events = events.clone();
-        let permission_events = events.clone();
-        let file_gate = FileGate::default();
-        let navigation_gate = file_gate.clone();
         #[cfg(target_os = "macos")]
-        let dropped = protection::Dropped::default();
-        #[cfg(target_os = "macos")]
-        let drop_record = dropped.clone();
-        let builder = wry::WebViewBuilder::new_with_web_context(web_context)
-            .with_visible(false)
-            .with_focused(false)
-            .with_incognito(private)
-            .with_autoplay(false)
-            .with_devtools(true)
-            .with_back_forward_navigation_gestures(true)
-            .with_document_title_changed_handler(move |title| {
-                let _ = title_events.try_send(Event::Title(id, title.chars().take(200).collect()));
-            })
-            .with_on_page_load_handler(move |event, url| {
-                let _ = load_events.try_send(Event::Loading(id, matches!(event, wry::PageLoadEvent::Started), url));
-            })
-            .with_navigation_handler(move |url| {
-                if crate::model::is_file_url(&url) {
-                    // Browser applied the file policy before admitting this.
-                    return navigation_gate.replace(false);
-                }
-                let allowed = crate::model::allowed_navigation(&url);
-                if !allowed { let _ = navigation_events.try_send(Event::Notice("This prototype supports HTTP and HTTPS links only.".into())); }
-                allowed
-            })
+        let page = {
+            let _ = web_context;
+            let host = Host {
+                events,
+                ids: ids.clone(),
+                foreground: cx.foreground_executor().clone(),
+                background: cx.background_executor().clone(),
+                parent: Parent::of(window)?,
+            };
+            Self::build(id, private, profile, None, &host)?
+        };
+        #[cfg(not(target_os = "macos"))]
+        let page = {
+            let _ = (profile, ids);
+            let file_gate = FileGate::default();
+            let popup_events = events.clone();
+            let permission_events = events.clone();
+            let builder = handlers(
+                wry::WebViewBuilder::new_with_web_context(web_context),
+                id,
+                private,
+                &events,
+                file_gate.clone(),
+            )
             .with_new_window_req_handler(move |url, _| {
                 if crate::model::allowed_navigation(&url) && url != "about:blank" {
                     let _ = popup_events.try_send(Event::NewTab(id, url));
@@ -343,113 +532,127 @@ impl Page {
                 wry::NewWindowResponse::Deny
             })
             .with_permission_handler(move |_| {
-                let _ = permission_events.try_send(Event::Notice("Site permission blocked. Camera, microphone, and other site grants are not implemented yet.".into()));
+                let _ = permission_events.try_send(Event::Notice("Site permission blocked. Camera, microphone, and other site grants are not implemented on this platform yet.".into()));
                 wry::PermissionResponse::Deny
-            })
-            // Registering a handler makes Wry answer WebKit with "download".
-            // On macOS, `Protection` then takes the download over (see
-            // `download.rs`), so this only runs elsewhere.
-            .with_download_started_handler(move |_, _| {
-                let _ = events.try_send(Event::Notice("Downloads are not available on this platform yet.".into()));
-                false
             });
-        #[cfg(target_os = "macos")]
-        let builder = {
-            use wry::WebViewBuilderExtMacos;
-            builder
-                .with_webview_configuration(page_configuration(private, profile))
-                // Pages keep their own drop zones. WebKit's fallback of
-                // loading a dropped file becomes new tabs (see `Protection`),
-                // which needs the paths the user actually dropped.
-                .with_drag_drop_handler(move |event| {
-                    if let wry::DragDropEvent::Drop { paths, .. } = event {
-                        drop_record.record(paths);
-                    }
-                    false
-                })
-        };
-        #[cfg(not(target_os = "macos"))]
-        let _ = profile;
-        #[cfg(target_os = "linux")]
-        let raw = {
             linux::initialize(cx)?;
-            builder.build_as_child(&linux::Parent::new(window)?)?
+            let raw = builder.build_as_child(&linux::Parent::new(window)?)?;
+            Rc::new(Self {
+                raw,
+                file_gate,
+                visible: Cell::new(false),
+                bounds: Cell::new(Bounds::default()),
+            })
         };
-        #[cfg(not(target_os = "linux"))]
-        let raw = {
-            let _ = cx;
-            builder.build_as_child(&*window)?
-        };
-        #[cfg(target_os = "macos")]
-        let protection = {
-            use wry::WebViewExtMacOS;
-            protection::Protection::install(
-                &raw.webview(),
-                protection::Policy {
-                    id,
-                    events: protection_events,
-                    file_gate,
-                    dropped,
-                },
-                cx,
-            )
-        };
-        #[cfg(target_os = "macos")]
-        let media = {
-            use wry::WebViewExtMacOS;
-            media::Media::install(
-                objc2::rc::Retained::into_super(raw.webview()),
+        page.load(url)?;
+        Ok(page)
+    }
+
+    /// Builds a page's view. `opened` is WebKit's configuration for a page
+    /// this one's opener asked for: WebKit loads it itself, and it shares the
+    /// opener's process, data store and content controller.
+    #[cfg(target_os = "macos")]
+    fn build(
+        id: u64,
+        private: bool,
+        profile: [u8; 16],
+        opened: Option<objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>>,
+        host: &Host,
+    ) -> anyhow::Result<Rc<Self>> {
+        use wry::{WebViewBuilderExtMacos, WebViewExtMacOS};
+        let file_gate = FileGate::default();
+        let dropped = protection::Dropped::default();
+        let drop_record = dropped.clone();
+        let inherited = opened.is_some();
+        let configuration = opened.unwrap_or_else(|| page_configuration(private, profile));
+        let raw = handlers(
+            wry::WebViewBuilder::new(),
+            id,
+            private,
+            &host.events,
+            file_gate.clone(),
+        )
+        .with_webview_configuration(configuration)
+        // Pages keep their own drop zones. WebKit's fallback of loading a
+        // dropped file becomes new tabs (see `Protection`), which needs the
+        // paths the user actually dropped.
+        .with_drag_drop_handler(move |event| {
+            if let wry::DragDropEvent::Drop { paths, .. } = event {
+                drop_record.record(paths);
+            }
+            false
+        })
+        .build_as_child(&host.parent)?;
+        let view = raw.webview();
+        let protection = protection::Protection::install(
+            &view,
+            protection::Policy {
                 id,
-                media_events.clone(),
-            )
-        };
-        #[cfg(target_os = "macos")]
-        let theme = {
-            use wry::WebViewExtMacOS;
-            theme::Theme::install(
-                objc2::rc::Retained::into_super(raw.webview()),
+                events: host.events.clone(),
+                file_gate,
+                dropped,
+            },
+            inherited,
+            host.foreground.clone(),
+            host.background.clone(),
+        );
+        let opener = host.clone();
+        let site = site::Site::install(
+            &view,
+            site::Policy {
                 id,
-                media_events.clone(),
-            )
-        };
-        #[cfg(target_os = "macos")]
-        let find = {
-            use wry::WebViewExtMacOS;
-            find::Find::install(
-                objc2::rc::Retained::into_super(raw.webview()),
-                id,
-                media_events.clone(),
-            )
-        };
-        #[cfg(not(target_os = "macos"))]
-        let _ = (protection_events, media_events);
-        let page = Rc::new(Self {
+                events: host.events.clone(),
+                foreground: host.foreground.clone(),
+                open: Rc::new(move |configuration, opening| {
+                    opener.open(id, private, profile, configuration, opening)
+                }),
+            },
+        );
+        let media = media::Media::install(
+            objc2::rc::Retained::into_super(view.clone()),
+            id,
+            host.events.clone(),
+        );
+        let find = find::Find::install(
+            objc2::rc::Retained::into_super(view.clone()),
+            id,
+            host.events.clone(),
+        );
+        let theme = theme::Theme::install(
+            objc2::rc::Retained::into_super(view),
+            id,
+            host.events.clone(),
+        );
+        Ok(Rc::new(Self {
             raw,
-            #[cfg(target_os = "macos")]
             _protection: protection,
-            #[cfg(not(target_os = "macos"))]
-            file_gate,
-            #[cfg(target_os = "macos")]
+            _site: site,
             media,
-            #[cfg(target_os = "macos")]
             _theme: theme,
             #[cfg(target_os = "macos")]
             find,
             visible: Cell::new(false),
             bounds: Cell::new(Bounds::default()),
-            #[cfg(target_os = "macos")]
-            executor: cx.foreground_executor().clone(),
-            #[cfg(target_os = "macos")]
+            executor: host.foreground.clone(),
             attaching: Cell::new(false),
-            #[cfg(target_os = "macos")]
             host: std::cell::RefCell::new(None),
-            #[cfg(target_os = "macos")]
             edge: std::cell::RefCell::new(None),
-            #[cfg(target_os = "macos")]
             edge_color: Cell::new(0xffffff),
-        });
-        page.load(url)?;
-        Ok(page)
+        }))
+    }
+
+    /// Stops any camera or microphone capture, after the user withdrew it.
+    pub fn stop_capture(&self) {
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_web_kit::WKMediaCaptureState;
+            use wry::WebViewExtMacOS;
+            let view = self.raw.webview();
+            unsafe {
+                view.setCameraCaptureState_completionHandler(WKMediaCaptureState::None, None);
+                view.setMicrophoneCaptureState_completionHandler(WKMediaCaptureState::None, None);
+            }
+        }
     }
 
     pub fn media_state(&self) -> MediaState {
@@ -834,6 +1037,17 @@ fn page_configuration(
             "Version/{} Safari/605.1.15",
             safari_version()
         ))));
+        // Scripts open windows only from a click or key press, as in Safari;
+        // AppKit's WebKit default lets any script open them.
+        let preferences = config.preferences();
+        preferences.setJavaScriptCanOpenWindowsAutomatically(false);
+        // WebKit hides `navigator.mediaDevices` from apps by default (SPI,
+        // Safari's own preference). Each use still asks; see `site.rs`.
+        let enable = objc2::sel!(_setMediaDevicesEnabled:);
+        let supported: bool = objc2::msg_send![&preferences, respondsToSelector: enable];
+        if supported {
+            let _: () = objc2::msg_send![&preferences, _setMediaDevicesEnabled: true];
+        }
         let responds =
             |selector| -> bool { objc2::msg_send![&config, respondsToSelector: selector] };
         if responds(objc2::sel!(_setSampledPageTopColorMaxDifference:))
@@ -1078,6 +1292,7 @@ mod app_link;
 
 #[cfg(target_os = "macos")]
 mod download;
+mod site;
 
 #[cfg(target_os = "macos")]
 mod fade;
