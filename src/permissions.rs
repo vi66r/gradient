@@ -14,6 +14,7 @@ pub enum Kind {
     Microphone,
     Screen,
     Location,
+    Notifications,
 }
 
 impl Kind {
@@ -22,12 +23,18 @@ impl Kind {
         self != Kind::Screen
     }
 
+    /// Notifications outlive the page that asked, so "once" means nothing.
+    pub fn offers_once(self) -> bool {
+        self != Kind::Notifications
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Kind::Camera => "camera",
             Kind::Microphone => "microphone",
             Kind::Screen => "screen",
             Kind::Location => "location",
+            Kind::Notifications => "notifications",
         }
     }
 }
@@ -37,6 +44,7 @@ pub fn question(site: &str, kinds: &[Kind]) -> String {
     let host = crate::model::display_host(site);
     match kinds {
         [Kind::Screen] => format!("Allow “{host}” to see your screen?"),
+        [Kind::Notifications] => format!("Allow “{host}” to send notifications?"),
         [Kind::Camera, Kind::Microphone] => {
             format!("Allow “{host}” to use your camera and microphone?")
         }
@@ -139,6 +147,21 @@ impl Store {
             .unwrap_or_default()
     }
 
+    /// Every site in a profile allowed one kind (notifications at startup).
+    pub fn sites(&self, profile: &[u8; 16], kind: Kind) -> Vec<String> {
+        self.saved
+            .profiles
+            .get(&profile_key(profile))
+            .map(|sites| {
+                sites
+                    .iter()
+                    .filter(|(_, kinds)| kinds.contains(&kind))
+                    .map(|(site, _)| site.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn allow(&mut self, profile: &[u8; 16], site: &str, kinds: &[Kind]) -> Result<()> {
         let granted = self
             .saved
@@ -222,6 +245,14 @@ mod tests {
         assert!(!store.allowed(&OTHER, meet, &[Kind::Camera]));
         assert!(!store.allowed(&PROFILE, "https://evil.example", &[Kind::Camera]));
         let mut store = store;
+        store
+            .allow(&PROFILE, "https://chat.example", &[Kind::Notifications])
+            .unwrap();
+        assert_eq!(
+            store.sites(&PROFILE, Kind::Notifications),
+            ["https://chat.example"]
+        );
+        assert!(store.sites(&OTHER, Kind::Notifications).is_empty());
         store.forget(&PROFILE, meet).unwrap();
         assert!(Store::open(dir.path()).site(&PROFILE, meet).is_empty());
     }
@@ -251,6 +282,10 @@ mod tests {
         assert_eq!(
             question("https://maps.example", &[Kind::Location]),
             "Allow “maps.example” to use your location?"
+        );
+        assert_eq!(
+            question("https://chat.example", &[Kind::Notifications]),
+            "Allow “chat.example” to send notifications?"
         );
         assert_eq!(summary(&[Kind::Camera, Kind::Location]), "Camera, location");
     }

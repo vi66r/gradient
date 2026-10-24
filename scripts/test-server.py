@@ -35,7 +35,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/api/"):
             return self.api()
-        pages = {"/sites": "sites.html", "/sign-in": "sign-in.html", "/framed": "framed.html"}
+        pages = {"/sites": "sites.html", "/sign-in": "sign-in.html", "/framed": "framed.html", "/notify": "notify.html"}
         name = pages.get(self.path.split("?")[0])
         name = name or ("gpu.html" if self.path.startswith("/gpu") else "browser.html")
         content = (ROOT / name).read_bytes()
