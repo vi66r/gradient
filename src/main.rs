@@ -329,6 +329,9 @@ impl Browser {
         let active = saved.active.min(tabs.len() - 1);
         let ids = engine::Ids::new(std::cell::Cell::new(tabs.len() as u64 + 1));
         let permissions = permissions::Store::open(store.dir());
+        engine::set_notification_sites(
+            permissions.sites(&profile, permissions::Kind::Notifications),
+        );
         let icon_cache = favicon::DiskCache::new(store.dir());
         let zooms = zoom::Zooms::load(store.dir());
         let mut this = Self {
@@ -748,9 +751,10 @@ impl Browser {
             None
         };
         let mut buttons = vec![PromptButton::cancel("Don’t Allow")];
-        if remember {
+        if remember && kinds.iter().all(|kind| kind.offers_once()) {
             buttons.push(PromptButton::new("Allow Once"));
         }
+        let always = buttons.len();
         buttons.push(PromptButton::new("Allow"));
         self.discard_pending = true;
         let answer = window.prompt(
@@ -768,11 +772,13 @@ impl Browser {
                 if !allow && let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == id) {
                     tab.declined.extend(kinds.iter().copied());
                 }
-                if remember
-                    && answer == Some(2)
-                    && let Err(error) = this.permissions.allow(&this.profile, &site, &kinds)
-                {
-                    this.notice = Some(error.to_string());
+                if remember && answer == Some(always) {
+                    if let Err(error) = this.permissions.allow(&this.profile, &site, &kinds) {
+                        this.notice = Some(error.to_string());
+                    }
+                    if kinds.contains(&permissions::Kind::Notifications) {
+                        engine::set_notification_site(&site, true);
+                    }
                 }
                 let _ = reply.try_send(allow);
                 cx.notify();
@@ -825,6 +831,9 @@ impl Browser {
                 }
                 if let Err(error) = this.permissions.forget(&this.profile, &site) {
                     this.notice = Some(error.to_string());
+                }
+                if granted.contains(&permissions::Kind::Notifications) {
+                    engine::set_notification_site(&site, false);
                 }
                 for tab in this.tabs.iter().filter(|tab| !tab.private) {
                     if let Some(page) = &tab.page
@@ -1524,6 +1533,16 @@ impl Browser {
                 background,
             } => self.opened(opener, id, url, popup, background, window, cx),
             engine::Event::Closed(id) => self.page_closed(id, window, cx),
+            engine::Event::NotificationClicked(identifier) => {
+                // The page hears the click either way; its tab comes forward.
+                let tab = engine::notification_clicked(&identifier)
+                    .and_then(|id| self.tabs.iter().position(|tab| tab.id == id));
+                if let Some(index) = tab {
+                    self.activate(index, window, cx);
+                }
+                cx.activate(true);
+                window.activate_window();
+            }
             engine::Event::Permission {
                 id,
                 site,

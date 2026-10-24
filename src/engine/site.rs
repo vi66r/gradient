@@ -1,6 +1,6 @@
 //! The page's WebKit UI delegate, in front of Wry's: opens popups as Browser
 //! pages, closes them when they ask, and asks the user before a site uses the
-//! camera, microphone, screen or location. Wry's own handlers answer
+//! camera, microphone, screen or location, or sends notifications. Wry's own handlers answer
 //! synchronously and can't see the frame, so they can't prompt.
 use crate::{engine::Event, permissions::Kind};
 use async_channel::Sender;
@@ -124,7 +124,7 @@ define_class!(
                 WKMediaCaptureType::CameraAndMicrophone => vec![Kind::Camera, Kind::Microphone],
                 _ => Vec::new(),
             };
-            self.ask(view, origin, frame, kinds, decision(handler));
+            self.ask(view, origin, Some(frame), kinds, decision(handler));
         }
     }
     impl Site {
@@ -132,7 +132,7 @@ define_class!(
         // denies geolocation and screen capture outright.
         #[unsafe(method(_webView:requestGeolocationPermissionForOrigin:initiatedByFrame:decisionHandler:))]
         unsafe fn location(&self, view: &WKWebView, origin: &WKSecurityOrigin, frame: &WKFrameInfo, handler: &Block<dyn Fn(WKPermissionDecision)>) {
-            self.ask(view, origin, frame, vec![Kind::Location], decision(handler));
+            self.ask(view, origin, Some(frame), vec![Kind::Location], decision(handler));
         }
 
         #[unsafe(method(_webView:requestDisplayCapturePermissionForOrigin:initiatedByFrame:withSystemAudio:decisionHandler:))]
@@ -141,7 +141,15 @@ define_class!(
             let pending = Pending(Some(Box::new(move |allow| {
                 handler.call((if allow { DISPLAY_SCREEN_PROMPT } else { DISPLAY_DENY },))
             })));
-            self.ask(view, origin, frame, vec![Kind::Screen], pending);
+            self.ask(view, origin, Some(frame), vec![Kind::Screen], pending);
+        }
+
+        // Only persistent stores get here; WebKit denies private tabs itself.
+        #[unsafe(method(_webView:requestNotificationPermissionForSecurityOrigin:decisionHandler:))]
+        unsafe fn notifications(&self, view: &WKWebView, origin: &WKSecurityOrigin, handler: &Block<dyn Fn(Bool)>) {
+            let handler = handler.copy();
+            let pending = Pending(Some(Box::new(move |allow| handler.call((Bool::new(allow),)))));
+            self.ask(view, origin, None, vec![Kind::Notifications], pending);
         }
 
         #[unsafe(method(forwardingTargetForSelector:))]
@@ -151,13 +159,14 @@ define_class!(
 
 impl Site {
     /// Only the tab's own site may ask. WebKit names the top page's origin
-    /// even for an embedded frame's request, so the frame's own origin must
-    /// match too: a frame from elsewhere is denied without a prompt.
+    /// even for an embedded frame's device request, so the frame's own origin
+    /// must match too: a frame from elsewhere is denied without a prompt. A
+    /// notification request names its own document's origin and no frame.
     fn ask(
         &self,
         view: &WKWebView,
         origin: &WKSecurityOrigin,
-        frame: &WKFrameInfo,
+        frame: Option<&WKFrameInfo>,
         kinds: Vec<Kind>,
         pending: Pending,
     ) {
@@ -178,10 +187,10 @@ impl Site {
             .and_then(|url| url.absoluteString())
             .and_then(|url| url::Url::parse(&url.to_string()).ok())
             .map(|url| url.origin().ascii_serialization());
-        let framed = site_of(&*unsafe { frame.securityOrigin() });
-        let Some(site) = site_of(origin)
-            .filter(|site| page.as_ref() == Some(site) && framed.as_ref() == Some(site))
-        else {
+        let framed = frame.map(|frame| site_of(&*unsafe { frame.securityOrigin() }));
+        let Some(site) = site_of(origin).filter(|site| {
+            page.as_ref() == Some(site) && framed.is_none_or(|framed| framed.as_ref() == Some(site))
+        }) else {
             return;
         };
         if kinds.is_empty() {

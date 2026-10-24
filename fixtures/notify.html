@@ -1,0 +1,20 @@
+<!doctype html><meta charset="utf-8"><title>Notifications</title><link rel="icon" href="/icon.svg" type="image/svg+xml">
+<style>body{font:16px system-ui;margin:0;background:#fafbff;color:#283146}main{max-width:650px;margin:48px auto}h1{font-size:32px;font-weight:500}button{margin:8px 8px 8px 0;padding:10px 14px;border:0;background:#456ae6;color:white;border-radius:8px}output{display:block;font:14px ui-monospace,monospace;margin:4px 0 16px;white-space:pre-wrap}</style>
+<main><h1>Notifications</h1>
+<button id="ask">Ask to notify</button><button id="send">Notify now</button><button id="later">Notify in 5 s</button>
+<output id="permission"></output><output id="log"></output></main>
+<script>
+window.events=[];
+const log=line=>{events.push(line);document.getElementById('log').textContent=events.join('\n');};
+const permission=()=>document.getElementById('permission').textContent='Notification.permission: '+Notification.permission;
+permission();
+window.state=()=>JSON.stringify({permission:Notification.permission,events});
+window.notify=title=>{const n=new Notification(title,{body:'From the fixture at '+location.host,tag:title});
+  n.onshow=()=>log('shown '+title);n.onclick=()=>log('clicked '+title);n.onclose=()=>log('closed '+title);n.onerror=()=>log('error '+title);window.last=n;};
+document.getElementById('ask').onclick=async()=>{log('asked: '+await Notification.requestPermission());permission();};
+document.getElementById('send').onclick=()=>notify('Now');
+document.getElementById('later').onclick=()=>setTimeout(()=>notify('Later'),5000);
+setInterval(permission,500);
+// ?auto: notify on load when the site is already allowed (seeded checks).
+if(location.search.includes('auto')&&Notification.permission==='granted')notify('Automatic');
+</script>

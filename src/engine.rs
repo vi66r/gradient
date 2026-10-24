@@ -79,6 +79,9 @@ pub enum Event {
         popup: bool,
         background: bool,
     },
+    /// The user clicked a site's notification (its Notification Center ID).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    NotificationClicked(String),
     /// A page closed itself (`window.close()`; WebKit allows it in a window
     /// a script opened, or one with no history).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -421,6 +424,40 @@ pub struct Page {
 impl Drop for Page {
     fn drop(&mut self) {
         let _ = self.raw.set_visible(false);
+        #[cfg(target_os = "macos")]
+        {
+            use wry::WebViewExtMacOS;
+            notifications::forget(&self.raw.webview());
+        }
+    }
+}
+
+/// Sites the user allowed to send notifications, for pages that start later.
+pub fn set_notification_sites(sites: Vec<String>) {
+    #[cfg(target_os = "macos")]
+    notifications::set_allowed(sites);
+    #[cfg(not(target_os = "macos"))]
+    let _ = sites;
+}
+
+/// The user allowed or reset a site's notifications; open pages learn it now.
+pub fn set_notification_site(site: &str, allowed: bool) {
+    #[cfg(target_os = "macos")]
+    notifications::set_site(site, allowed);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (site, allowed);
+}
+
+/// Tells the page its notification was clicked; returns the tab to show.
+pub fn notification_clicked(identifier: &str) -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        notifications::clicked(identifier)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = identifier;
+        None
     }
 }
 
@@ -596,6 +633,7 @@ impl Page {
             host.foreground.clone(),
             host.background.clone(),
         );
+        notifications::install(&view, id, &host.events);
         let opener = host.clone();
         let site = site::Site::install(
             &view,
@@ -1292,6 +1330,9 @@ mod app_link;
 
 #[cfg(target_os = "macos")]
 mod download;
+#[cfg(target_os = "macos")]
+mod notifications;
+#[cfg(target_os = "macos")]
 mod site;
 
 #[cfg(target_os = "macos")]
