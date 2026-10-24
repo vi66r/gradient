@@ -90,30 +90,14 @@ impl Browser {
             .w(px(SIDEBAR))
             .flex_shrink_0()
             .h_full()
+            // The traffic lights' row; the Spaces switcher will live here.
             .child(
-                // Traffic lights sit at the left of this row.
                 div()
-                    .h(px(44.))
+                    .id("sidebar-titlebar")
+                    .h(px(CONTROL_ZONE))
                     .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap_0p5()
-                    .px_2()
-                    .child(
-                        icon_button("back", "Back", IconName::ChevronLeft, p)
-                            .on_click(cx.listener(|this, _, _, _| this.history(false))),
-                    )
-                    .child(
-                        icon_button("forward", "Forward", IconName::ChevronRight, p)
-                            .on_click(cx.listener(|this, _, _, _| this.history(true))),
-                    )
-                    .child(
-                        icon_button("reload", "Reload", IconName::RotateCw, p)
-                            .on_click(cx.listener(|this, _, w, cx| this.reload(w, cx))),
-                    ),
+                    .on_mouse_down(MouseButton::Left, move_window),
             )
-            .child(div().px_2().pb_3().child(self.address_field(window, cx)))
             .child(
                 div()
                     .id("tab-list")
@@ -173,15 +157,6 @@ impl Browser {
                         )
                         .when(grant, |d| d.text_color(rgb(p.accent)))
                         .on_click(cx.listener(|this, _, w, cx| this.toggle_agent(w, cx))),
-                    )
-                    .child(
-                        icon_button("inspector", "Inspect page", IconName::Code, p).on_click(
-                            cx.listener(|this, _, _, _| {
-                                if let Some(page) = &this.tabs[this.active].page {
-                                    page.raw.open_devtools();
-                                }
-                            }),
-                        ),
                     )
                     .when(grant, |d| {
                         d.child(
@@ -419,128 +394,6 @@ impl Browser {
                 Animation::new(NORMAL).with_easing(ease_out_quint()),
                 |row, delta| row.opacity(delta).ml(px(6. * (1. - delta))),
             )
-    }
-
-    fn address_field(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let p = palette(self.dark);
-        let tab = &self.tabs[self.active];
-        let editing = self.address.read(cx).focus_handle(cx).is_focused(window);
-        let field = div()
-            .id("address")
-            .h(px(36.))
-            .relative()
-            .overflow_hidden()
-            .flex()
-            .items_center()
-            .rounded(px(R_CONTROL))
-            .bg(rgb(if editing { p.card } else { p.field }))
-            .border_1()
-            .border_color(rgb(if editing { p.accent } else { p.line }));
-        let field = if editing {
-            field.px_1().child(
-                Input::new(&self.address)
-                    .appearance(false)
-                    .aria_label("Search or enter address")
-                    .prefix(
-                        Icon::new(IconName::Search)
-                            .size_3p5()
-                            .text_color(rgb(p.muted)),
-                    ),
-            )
-        } else {
-            let url = &tab.saved.url;
-            let secure = url.starts_with("https://");
-            let (icon, text, ink) = if url == START {
-                (
-                    IconName::Search,
-                    "Search or enter address".to_string(),
-                    p.muted,
-                )
-            } else {
-                (
-                    if tab.private {
-                        IconName::Lock
-                    } else if secure {
-                        IconName::LockKeyhole
-                    } else if model::is_file_url(url) {
-                        IconName::FileText
-                    } else {
-                        IconName::Globe
-                    },
-                    address_label(url),
-                    p.ink,
-                )
-            };
-            let copied = self.copy_feedback == Some(CopyTarget::Address);
-            field
-                .pl_2p5()
-                .pr_1()
-                .gap_2()
-                .cursor_text()
-                .hover(|s| s.bg(rgb(p.card)))
-                .child(Icon::new(icon).size_3p5().text_color(rgb(p.muted)))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(13.))
-                        .text_color(rgb(ink))
-                        .child(text),
-                )
-                .when(url != START, |d| {
-                    d.child(
-                        icon_button(
-                            "copy-url",
-                            if copied {
-                                "Address copied"
-                            } else {
-                                "Copy address"
-                            },
-                            if copied {
-                                IconName::Check
-                            } else {
-                                IconName::Copy
-                            },
-                            p,
-                        )
-                        .size(px(26.))
-                        .rounded(px(R_CONTROL - 5.))
-                        .when(copied, |d| d.text_color(rgb(p.accent)))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.copy_url(cx);
-                        }))
-                        .with_animation(
-                            ("copy-feedback", self.copy_epoch),
-                            Animation::new(NORMAL).with_easing(ease_out_quint()),
-                            |button, delta| button.opacity(0.4 + 0.6 * delta),
-                        ),
-                    )
-                })
-                .on_click(cx.listener(|this, _, w, cx| this.focus_address(w, cx)))
-        };
-        field
-            .when(tab.loading && !self.lab, |d| {
-                d.child(
-                    div()
-                        .absolute()
-                        .bottom_0()
-                        .left_0()
-                        .h(px(2.))
-                        .w(relative(0.4))
-                        .rounded_full()
-                        .bg(rgb(p.accent))
-                        .with_animation(
-                            "loading",
-                            Animation::new(Duration::from_millis(1100))
-                                .repeat()
-                                .with_easing(ease_in_out),
-                            |bar, delta| bar.left(relative(delta * 1.4 - 0.4)),
-                        ),
-                )
-            })
-            .into_any_element()
     }
 
     fn start_page(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -979,7 +832,7 @@ impl Render for Browser {
                         .border_l_1()
                         .border_color(panel_edge(self.dark))
                         .shadow(panel_shadow(self.dark))
-                        .child(self.control_zone(p, cx))
+                        .child(self.control_zone(p, window, cx))
                         .child(body)
                         .when_some(self.notice.clone(), |d, message| {
                             d.child(
@@ -1046,22 +899,28 @@ fn panel_shadow(dark: bool) -> Vec<BoxShadow> {
 }
 
 impl Browser {
-    fn control_zone(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// The page's own top bar: navigation, a borderless address and page
+    /// actions on a strip tinted with the page's color. Empty space drags the
+    /// window (double-click zooms); controls keep their clicks to themselves.
+    fn control_zone(
+        &self,
+        p: Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let tab = &self.tabs[self.active];
         let tint = tab.tint.filter(|_| !self.lab && tab.page.is_some());
         let background = tint.unwrap_or(p.card);
-        let title: SharedString = if self.lab {
-            "Request lab".into()
-        } else if tab.saved.title.is_empty() {
-            model::display_host(&tab.saved.url).into()
+        let ink = tint.map(readable_on).unwrap_or(p.ink);
+        // Hover washes that work on any page color.
+        let wash = if ink == 0xf2f3f5 || (tint.is_none() && self.dark) {
+            0xffffff1f
         } else {
-            tab.saved.title.clone().into()
+            0x0000000f
         };
-        let ink = if tint.is_some() {
-            readable_on(background)
-        } else {
-            p.muted
-        };
+        let live = tab.page.is_some() && !self.lab;
+        let addressed = tab.saved.url != START;
+        let copied = self.copy_feedback == Some(CopyTarget::Address);
         div()
             .id("control-zone")
             .h(px(CONTROL_ZONE))
@@ -1069,28 +928,200 @@ impl Browser {
             // shape, so the strip rounds its own corner to match.
             .rounded_tl(px(CARD_RADIUS))
             .flex_shrink_0()
-            .px(px(72.))
+            .relative()
+            .px_2()
             .flex()
             .items_center()
-            .justify_center()
+            .gap_0p5()
             .bg(rgb(background))
-            .text_size(px(12.))
-            .font_weight(FontWeight::MEDIUM)
             .text_color(rgb(ink))
-            .child(div().min_w_0().truncate().opacity(0.7).child(title))
-            // The whole strip moves the window; a double-click zooms it,
-            // like any titlebar.
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, event: &MouseDownEvent, window, _| {
-                    if event.click_count == 2 {
-                        window.titlebar_double_click();
-                    } else {
-                        window.start_window_move();
-                    }
-                }),
+            .child(
+                strip_button("back", "Back", IconName::ChevronLeft, wash)
+                    .on_click(cx.listener(|this, _, _, _| this.history(false))),
             )
+            .child(
+                strip_button("forward", "Forward", IconName::ChevronRight, wash)
+                    .on_click(cx.listener(|this, _, _, _| this.history(true))),
+            )
+            .child(
+                strip_button("reload", "Reload", IconName::RotateCw, wash)
+                    .on_click(cx.listener(|this, _, w, cx| this.reload(w, cx))),
+            )
+            .child(self.address(p, wash, window, cx))
+            .child(div().flex_1().h_full())
+            .when(addressed, |strip| {
+                strip.child(
+                    strip_button(
+                        "copy-url",
+                        if copied {
+                            "Address copied"
+                        } else {
+                            "Copy address"
+                        },
+                        if copied {
+                            IconName::Check
+                        } else {
+                            IconName::Copy
+                        },
+                        wash,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.copy_url(cx)))
+                    .with_animation(
+                        ("copy-feedback", self.copy_epoch),
+                        Animation::new(NORMAL).with_easing(ease_out_quint()),
+                        |button, delta| button.opacity(0.4 + 0.6 * delta),
+                    ),
+                )
+            })
+            .when(live, |strip| {
+                strip.child(
+                    strip_button("inspector", "Inspect page", IconName::Code, wash).on_click(
+                        cx.listener(|this, _, _, _| {
+                            if let Some(page) = &this.tabs[this.active].page {
+                                page.raw.open_devtools();
+                            }
+                        }),
+                    ),
+                )
+            })
+            .when(tab.loading && !self.lab, |strip| {
+                strip.child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .h(px(2.))
+                        .w(relative(0.3))
+                        .rounded_full()
+                        .bg(rgb(p.accent))
+                        .with_animation(
+                            "loading",
+                            Animation::new(Duration::from_millis(1100))
+                                .repeat()
+                                .with_easing(ease_in_out),
+                            |bar, delta| bar.left(relative(delta * 1.3 - 0.3)),
+                        ),
+                )
+            })
+            .on_mouse_down(MouseButton::Left, move_window)
     }
+
+    /// Borderless at rest (lock or globe and the host, as in the page's own
+    /// colors); a solid field while editing so typed text always reads.
+    fn address(
+        &self,
+        p: Palette,
+        wash: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let tab = &self.tabs[self.active];
+        let editing = self.address.read(cx).focus_handle(cx).is_focused(window);
+        let field = div()
+            .id("address")
+            .min_w_0()
+            .h(px(30.))
+            .mx_1()
+            .flex()
+            .items_center()
+            .rounded(px(R_CONTROL))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        if editing {
+            return field
+                .flex_1()
+                .px_1()
+                .bg(rgb(p.card))
+                .border_1()
+                .border_color(rgb(p.accent))
+                .text_color(rgb(p.ink))
+                .child(
+                    Input::new(&self.address)
+                        .appearance(false)
+                        .aria_label("Search or enter address")
+                        .prefix(
+                            Icon::new(IconName::Search)
+                                .size_3p5()
+                                .text_color(rgb(p.muted)),
+                        ),
+                )
+                .into_any_element();
+        }
+        let url = &tab.saved.url;
+        let (icon, text, placeholder) = if url == START {
+            (
+                IconName::Search,
+                "Search or enter address".to_string(),
+                true,
+            )
+        } else {
+            (
+                if tab.private {
+                    IconName::Lock
+                } else if url.starts_with("https://") {
+                    IconName::LockKeyhole
+                } else if model::is_file_url(url) {
+                    IconName::FileText
+                } else {
+                    IconName::Globe
+                },
+                address_label(url),
+                false,
+            )
+        };
+        // At rest the address hugs its text; the rest of the strip stays free
+        // for dragging the window.
+        field
+            .flex_shrink(1.)
+            .max_w(relative(0.6))
+            .px_2()
+            .gap_2()
+            .cursor_text()
+            .hover(move |s| s.bg(rgba(wash)))
+            .child(Icon::new(icon).size_3p5().opacity(0.6))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(13.))
+                    .when(placeholder, |d| d.opacity(0.55))
+                    .child(text),
+            )
+            .on_click(cx.listener(|this, _, w, cx| this.focus_address(w, cx)))
+            .into_any_element()
+    }
+}
+
+/// Titlebar behaviour for shell-drawn titlebar areas: drag moves the window,
+/// a double-click zooms it (or whatever the user set in System Settings).
+fn move_window(event: &MouseDownEvent, window: &mut Window, _: &mut App) {
+    if event.click_count == 2 {
+        window.titlebar_double_click();
+    } else {
+        window.start_window_move();
+    }
+}
+
+/// A control on the page-tinted strip: inherits the strip's ink, uses a
+/// translucent wash on hover, and never starts a window drag.
+fn strip_button(id: &'static str, title: &str, icon: IconName, wash: u32) -> Stateful<Div> {
+    let tip: SharedString = title.to_string().into();
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(title.to_string())
+        .size(px(28.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(R_BUTTON))
+        .cursor_pointer()
+        .opacity(0.72)
+        .hover(move |s| s.bg(rgba(wash)).opacity(1.))
+        .active(|s| s.opacity(0.55))
+        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(Icon::new(icon).size_4())
 }
 
 /// Dark or light text, whichever reads on `background` (`0xRRGGBB`).

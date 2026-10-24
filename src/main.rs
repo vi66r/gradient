@@ -1588,6 +1588,10 @@ fn main() -> anyhow::Result<()> {
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(16.), px(16.))),
                 }),
+                // The shell draws its own titlebar: the page strip and the
+                // sidebar's top row move the window themselves, so controls
+                // inside the titlebar band never start a native drag.
+                app_owns_titlebar_drag: true,
                 ..Default::default()
             },
             cx,
