@@ -2,7 +2,7 @@ use crate::*;
 use gpui::assets::IconName;
 use gpui::base::motion::{self, Transition};
 use gpui::component::{
-    Icon,
+    ActiveTheme, Icon, Theme,
     input::{Input, Textarea},
     tooltip::Tooltip,
 };
@@ -932,6 +932,13 @@ impl Browser {
         let background = tint.unwrap_or(p.card);
         let ink = tint.map(readable_on).unwrap_or(p.ink);
         let over_dark = ink == 0xf2f3f5 || (tint.is_none() && self.dark);
+        // The theme's caret is a fixed primary that can vanish on a page's
+        // color; the strip's ink always reads. Request Lab's fields sit on
+        // the palette, where the untinted ink is the palette's own.
+        let caret: Hsla = rgb(ink).into();
+        if cx.theme().caret != caret {
+            Theme::global_mut(cx).caret = caret;
+        }
         // Hover washes that work on any page color.
         let wash = if over_dark { 0xffffff1f } else { 0x0000000f };
         let live = tab.page.is_some() && !self.lab;
@@ -1034,29 +1041,33 @@ impl Browser {
             .on_mouse_down(MouseButton::Left, move_window)
     }
 
-    /// A pill that fills the strip between the buttons. At rest it is a
-    /// faint glass well showing the host; while editing it lifts into a
-    /// brighter glass panel with a hairline and a soft shadow, rather than a
-    /// solid field with an accent ring. Its text takes the strip's ink, so it
-    /// reads on any page color. Dragging the resting pill moves the window,
-    /// since it covers most of the strip's drag area.
+    /// The address, filling the strip between the buttons. At rest it is
+    /// just the site's icon and host on the strip itself, left-aligned, with
+    /// no field around it. Editing lifts a glass pill out of the strip (fill,
+    /// hairline and shadow ease in together) while the content cross-fades,
+    /// and both states share one layout so nothing jumps. Its text and caret
+    /// take the strip's ink, so they read on any page color. Dragging the
+    /// resting address moves the window, since it covers most of the strip's
+    /// drag area.
     fn address(&self, glass: Glass, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let tab = &self.tabs[self.active];
         let editing = self.address.read(cx).focus_handle(cx).is_focused(window);
         let lift = motion::transition(
             "address-lift",
             if editing { 1. } else { 0. },
-            Transition::new(FAST),
+            Transition::new(NORMAL),
             window,
             cx,
         );
+        // Whichever content is showing fades up from partway as the pill
+        // moves, so the swap reads as one change rather than a cut.
+        let presence = if editing { lift } else { 1. - lift };
         let field = div()
             .id("address")
             .flex_1()
             .min_w_0()
             .h(px(30.))
             .mx_1()
-            .px_3()
             .flex()
             .items_center()
             .rounded_full()
@@ -1064,14 +1075,27 @@ impl Browser {
             .border_1()
             .border_color(glass.edge(lift))
             .shadow(glass.shadow(lift));
+        let content = div()
+            .size_full()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .opacity(0.3 + 0.7 * presence);
         if editing {
             return field
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
-                    Input::new(&self.address)
-                        .appearance(false)
-                        .aria_label("Search or enter address")
-                        .prefix(Icon::new(IconName::Search).size_3p5().opacity(0.6)),
+                    content.child(
+                        Input::new(&self.address)
+                            .appearance(false)
+                            .aria_label("Search or enter address")
+                            // Line the text up with the resting address.
+                            .h_full()
+                            .py_0()
+                            .px_3()
+                            .text_size(px(13.))
+                            .prefix(Icon::new(IconName::Search).size_3p5().opacity(0.6)),
+                    ),
                 )
                 .into_any_element();
         }
@@ -1098,18 +1122,20 @@ impl Browser {
             )
         };
         field
-            .justify_center()
-            .gap_2()
             .cursor_text()
-            .hover(move |s| s.bg(glass.hover()))
-            .child(Icon::new(icon).size_3p5().opacity(0.6))
             .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(13.))
-                    .when(placeholder, |d| d.opacity(0.55))
-                    .child(text),
+                content
+                    .px_3()
+                    .gap_1p5()
+                    .child(Icon::new(icon).size_3p5().opacity(0.6))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(13.))
+                            .when(placeholder, |d| d.opacity(0.55))
+                            .child(text),
+                    ),
             )
             .on_mouse_down(
                 MouseButton::Left,
@@ -1144,8 +1170,8 @@ impl Browser {
 }
 
 /// Translucent layers for the address pill, tuned to the strip beneath it:
-/// white glass over dark strips, a faint dark well that lifts into frosted
-/// white over light ones. `lift` runs 0 (resting) to 1 (editing).
+/// white glass over dark strips, frosted white over light ones. `lift` runs
+/// 0 (resting: nothing visible) to 1 (editing).
 #[derive(Clone, Copy)]
 struct Glass {
     over_dark: bool,
@@ -1153,27 +1179,7 @@ struct Glass {
 
 impl Glass {
     fn fill(self, lift: f32) -> Hsla {
-        if self.over_dark {
-            white(mix(0.06, 0.12, lift))
-        } else {
-            // Black well to white panel: blend the channel with the alpha.
-            let tone = lift;
-            gpui::Rgba {
-                r: tone,
-                g: tone,
-                b: tone,
-                a: mix(0.045, 0.72, lift),
-            }
-            .into()
-        }
-    }
-
-    fn hover(self) -> Hsla {
-        if self.over_dark {
-            white(0.09)
-        } else {
-            black(0.07)
-        }
+        white(lift * if self.over_dark { 0.12 } else { 0.72 })
     }
 
     fn edge(self, lift: f32) -> Hsla {
@@ -1189,16 +1195,12 @@ impl Glass {
         let layer = |alpha: f32, y: f32, blur: f32| BoxShadow {
             color: black(alpha * depth * lift),
             offset: point(px(0.), px(y * lift)),
-            blur_radius: px(blur),
+            blur_radius: px(blur * lift),
             spread_radius: px(0.),
             inset: false,
         };
         vec![layer(0.22, 1., 2.), layer(0.26, 4., 12.)]
     }
-}
-
-fn mix(from: f32, to: f32, progress: f32) -> f32 {
-    from + (to - from) * progress
 }
 
 fn white(alpha: f32) -> Hsla {

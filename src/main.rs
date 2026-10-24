@@ -173,9 +173,12 @@ impl Browser {
                 .rows(18)
         });
         let address_events = cx.subscribe_in(&address, window, |this, input, event, window, cx| {
-            // The resting field shows the host; focus swaps in the full URL.
+            // The resting field shows the host; focus swaps in the full URL,
+            // selected so typing replaces it. Setting the value clears any
+            // selection, so this selects after the swap.
             if matches!(event, InputEvent::Focus) {
                 this.sync_address(window, cx);
+                input.update(cx, |input, cx| input.select_all(window, cx));
             }
             if matches!(event, InputEvent::Focus | InputEvent::Blur) {
                 cx.notify();
@@ -755,14 +758,18 @@ impl Browser {
         cx.notify();
     }
 
+    /// Focus fills in and selects the URL (see the address subscription).
     fn focus_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.sync_address(window, cx);
         if let Some(page) = &self.tabs[self.active].page {
             let _ = page.raw.focus_parent();
         }
         self.address.update(cx, |input, cx| {
-            input.focus(window, cx);
-            input.select_all(window, cx);
+            if input.focus_handle(cx).is_focused(window) {
+                // Already editing, so no focus event: select here.
+                input.select_all(window, cx);
+            } else {
+                input.focus(window, cx);
+            }
         });
     }
 
