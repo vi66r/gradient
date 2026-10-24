@@ -33,6 +33,27 @@ pub enum Event {
         scheme: String,
         reply: Sender<bool>,
     },
+    /// A download got its destination and began writing.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    DownloadStarted {
+        id: u64,
+        tab: u64,
+        name: String,
+        path: std::path::PathBuf,
+    },
+    /// A download finished (`ok`) or failed. Cancelled downloads send nothing.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    DownloadEnded {
+        id: u64,
+        ok: bool,
+    },
+    /// A tab's main-frame load turned into a download. `empty` when the tab
+    /// has no document to show (it was opened for the download).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    PageBecameDownload {
+        id: u64,
+        empty: bool,
+    },
     Title(u64, String),
     Loading(u64, bool, String),
     NewTab(u64, String),
@@ -86,6 +107,41 @@ pub fn open_app_link(url: &str) -> bool {
         let _ = url;
         false
     }
+}
+
+/// Bytes received by a download in flight, and its total when known.
+pub fn download_progress(id: u64) -> Option<(i64, Option<i64>)> {
+    #[cfg(target_os = "macos")]
+    {
+        download::progress(id)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = id;
+        None
+    }
+}
+
+/// Stops a download and removes its partial file.
+pub fn cancel_download(id: u64) {
+    #[cfg(target_os = "macos")]
+    download::cancel(id);
+    #[cfg(not(target_os = "macos"))]
+    let _ = id;
+}
+
+/// Stops every download in flight, before quitting.
+pub fn cancel_downloads() {
+    #[cfg(target_os = "macos")]
+    download::cancel_all();
+}
+
+/// Shows a downloaded file in the file manager.
+pub fn reveal(path: &std::path::Path) {
+    #[cfg(target_os = "macos")]
+    download::reveal(path);
+    #[cfg(not(target_os = "macos"))]
+    let _ = path;
 }
 
 pub struct PageOptions<'a> {
@@ -261,8 +317,11 @@ impl Page {
                 let _ = permission_events.try_send(Event::Notice("Site permission blocked. Camera, microphone, and other site grants are not implemented yet.".into()));
                 wry::PermissionResponse::Deny
             })
+            // Registering a handler makes Wry answer WebKit with "download".
+            // On macOS, `Protection` then takes the download over (see
+            // `download.rs`), so this only runs elsewhere.
             .with_download_started_handler(move |_, _| {
-                let _ = events.try_send(Event::Notice("Downloads are not available in this prototype yet.".into()));
+                let _ = events.try_send(Event::Notice("Downloads are not available on this platform yet.".into()));
                 false
             });
         #[cfg(target_os = "macos")]
@@ -895,6 +954,9 @@ mod protection;
 
 #[cfg(target_os = "macos")]
 mod app_link;
+
+#[cfg(target_os = "macos")]
+mod download;
 
 #[cfg(target_os = "macos")]
 mod fade;
