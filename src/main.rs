@@ -120,6 +120,8 @@ struct Browser {
     notice: Option<String>,
     copy_feedback: Option<CopyTarget>,
     copy_epoch: u64,
+    /// Where a press on the resting address began, until it clicks or drags.
+    address_press: Option<Point<Pixels>>,
     discard_pending: bool,
     #[cfg(target_os = "macos")]
     termination: Option<engine::TerminationGuard>,
@@ -258,6 +260,7 @@ impl Browser {
             notice,
             copy_feedback: None,
             copy_epoch: 0,
+            address_press: None,
             discard_pending: false,
             #[cfg(target_os = "macos")]
             termination: None,

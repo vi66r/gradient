@@ -59,7 +59,7 @@ const SIDEBAR: f32 = 248.;
 /// The page panel runs flush to the window's top, right and bottom edges; only
 /// its sidebar-facing corners are rounded, so it reads as lying above the
 /// sidebar rather than framed inside the window.
-pub(crate) const CARD_RADIUS: f32 = 16.;
+pub(crate) const CARD_RADIUS: f32 = 20.;
 /// The draggable strip across the top of the page panel: a calm "control
 /// zone" in the titlebar band, tinted with the page's own color. It is where
 /// a full-page app's chrome will live once pages can go UI-less.
@@ -69,8 +69,8 @@ const CONTROL_ZONE: f32 = 44.;
 /// Radius scale. Controls (address field, tab cells, rows) share one radius,
 /// standalone buttons a step smaller, and anything nested inside a control
 /// uses the control's radius minus its inset, so curves stay concentric.
-const R_CONTROL: f32 = 10.;
-const R_BUTTON: f32 = 8.;
+const R_CONTROL: f32 = 12.;
+const R_BUTTON: f32 = 10.;
 /// Height of the media controls a playing tab's sidebar cell grows by.
 const MEDIA_STRIP: f32 = 30.;
 const FAST: Duration = Duration::from_millis(140);
@@ -231,7 +231,7 @@ impl Browser {
             img(image)
                 .size(px(16.))
                 .flex_shrink_0()
-                .rounded(px(3.))
+                .rounded(px(4.))
                 // Resting tabs keep their identity but read as asleep.
                 .when(resting, |icon| icon.opacity(0.5))
                 .into_any_element()
@@ -601,7 +601,7 @@ impl Browser {
                         .flex()
                         .p_0p5()
                         .gap_0p5()
-                        .rounded(px(8.))
+                        .rounded(px(R_BUTTON))
                         .bg(rgb(p.field))
                         .children(
                             ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
@@ -615,7 +615,7 @@ impl Browser {
                                         .aria_selected(active)
                                         .px_2()
                                         .py_1()
-                                        .rounded(px(6.))
+                                        .rounded(px(R_BUTTON - 2.))
                                         .text_size(px(11.))
                                         .font_weight(FontWeight::MEDIUM)
                                         .cursor_pointer()
@@ -931,12 +931,9 @@ impl Browser {
         let tint = tab.tint.filter(|_| !self.lab && tab.page.is_some());
         let background = tint.unwrap_or(p.card);
         let ink = tint.map(readable_on).unwrap_or(p.ink);
+        let over_dark = ink == 0xf2f3f5 || (tint.is_none() && self.dark);
         // Hover washes that work on any page color.
-        let wash = if ink == 0xf2f3f5 || (tint.is_none() && self.dark) {
-            0xffffff1f
-        } else {
-            0x0000000f
-        };
+        let wash = if over_dark { 0xffffff1f } else { 0x0000000f };
         let live = tab.page.is_some() && !self.lab;
         let addressed = tab.saved.url != START;
         let copied = self.copy_feedback == Some(CopyTarget::Address);
@@ -979,8 +976,7 @@ impl Browser {
                 strip_button("reload", "Reload", IconName::RotateCw, wash)
                     .on_click(cx.listener(|this, _, w, cx| this.reload(w, cx))),
             )
-            .child(self.address(p, wash, window, cx))
-            .child(div().flex_1().h_full())
+            .child(self.address(Glass { over_dark }, window, cx))
             .when(addressed, |strip| {
                 strip.child(
                     strip_button(
@@ -1038,43 +1034,44 @@ impl Browser {
             .on_mouse_down(MouseButton::Left, move_window)
     }
 
-    /// Borderless at rest (lock or globe and the host, as in the page's own
-    /// colors); a solid field while editing so typed text always reads.
-    fn address(
-        &self,
-        p: Palette,
-        wash: u32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// A pill that fills the strip between the buttons. At rest it is a
+    /// faint glass well showing the host; while editing it lifts into a
+    /// brighter glass panel with a hairline and a soft shadow, rather than a
+    /// solid field with an accent ring. Its text takes the strip's ink, so it
+    /// reads on any page color. Dragging the resting pill moves the window,
+    /// since it covers most of the strip's drag area.
+    fn address(&self, glass: Glass, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let tab = &self.tabs[self.active];
         let editing = self.address.read(cx).focus_handle(cx).is_focused(window);
+        let lift = motion::transition(
+            "address-lift",
+            if editing { 1. } else { 0. },
+            Transition::new(FAST),
+            window,
+            cx,
+        );
         let field = div()
             .id("address")
+            .flex_1()
             .min_w_0()
             .h(px(30.))
             .mx_1()
+            .px_3()
             .flex()
             .items_center()
-            .rounded(px(R_CONTROL))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+            .rounded_full()
+            .bg(glass.fill(lift))
+            .border_1()
+            .border_color(glass.edge(lift))
+            .shadow(glass.shadow(lift));
         if editing {
             return field
-                .flex_1()
-                .px_1()
-                .bg(rgb(p.card))
-                .border_1()
-                .border_color(rgb(p.accent))
-                .text_color(rgb(p.ink))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
                     Input::new(&self.address)
                         .appearance(false)
                         .aria_label("Search or enter address")
-                        .prefix(
-                            Icon::new(IconName::Search)
-                                .size_3p5()
-                                .text_color(rgb(p.muted)),
-                        ),
+                        .prefix(Icon::new(IconName::Search).size_3p5().opacity(0.6)),
                 )
                 .into_any_element();
         }
@@ -1100,15 +1097,11 @@ impl Browser {
                 false,
             )
         };
-        // At rest the address hugs its text; the rest of the strip stays free
-        // for dragging the window.
         field
-            .flex_shrink(1.)
-            .max_w(relative(0.6))
-            .px_2()
+            .justify_center()
             .gap_2()
             .cursor_text()
-            .hover(move |s| s.bg(rgba(wash)))
+            .hover(move |s| s.bg(glass.hover()))
             .child(Icon::new(icon).size_3p5().opacity(0.6))
             .child(
                 div()
@@ -1118,9 +1111,114 @@ impl Browser {
                     .when(placeholder, |d| d.opacity(0.55))
                     .child(text),
             )
-            .on_click(cx.listener(|this, _, w, cx| this.focus_address(w, cx)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    if event.click_count == 2 {
+                        window.titlebar_double_click();
+                    } else {
+                        this.address_press = Some(event.position);
+                    }
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, _| {
+                let Some(start) = this.address_press else {
+                    return;
+                };
+                if event.pressed_button != Some(MouseButton::Left) {
+                    this.address_press = None;
+                } else if (event.position - start).magnitude() > 4. {
+                    this.address_press = None;
+                    window.start_window_move();
+                }
+            }))
+            .on_click(cx.listener(|this, _, w, cx| {
+                // A press that turned into a window drag isn't a click.
+                if this.address_press.take().is_some() {
+                    this.focus_address(w, cx);
+                }
+            }))
             .into_any_element()
     }
+}
+
+/// Translucent layers for the address pill, tuned to the strip beneath it:
+/// white glass over dark strips, a faint dark well that lifts into frosted
+/// white over light ones. `lift` runs 0 (resting) to 1 (editing).
+#[derive(Clone, Copy)]
+struct Glass {
+    over_dark: bool,
+}
+
+impl Glass {
+    fn fill(self, lift: f32) -> Hsla {
+        if self.over_dark {
+            white(mix(0.06, 0.12, lift))
+        } else {
+            // Black well to white panel: blend the channel with the alpha.
+            let tone = lift;
+            gpui::Rgba {
+                r: tone,
+                g: tone,
+                b: tone,
+                a: mix(0.045, 0.72, lift),
+            }
+            .into()
+        }
+    }
+
+    fn hover(self) -> Hsla {
+        if self.over_dark {
+            white(0.09)
+        } else {
+            black(0.07)
+        }
+    }
+
+    fn edge(self, lift: f32) -> Hsla {
+        if self.over_dark {
+            white(0.14 * lift)
+        } else {
+            black(0.08 * lift)
+        }
+    }
+
+    fn shadow(self, lift: f32) -> Vec<BoxShadow> {
+        let depth = if self.over_dark { 1. } else { 0.45 };
+        let layer = |alpha: f32, y: f32, blur: f32| BoxShadow {
+            color: black(alpha * depth * lift),
+            offset: point(px(0.), px(y * lift)),
+            blur_radius: px(blur),
+            spread_radius: px(0.),
+            inset: false,
+        };
+        vec![layer(0.22, 1., 2.), layer(0.26, 4., 12.)]
+    }
+}
+
+fn mix(from: f32, to: f32, progress: f32) -> f32 {
+    from + (to - from) * progress
+}
+
+fn white(alpha: f32) -> Hsla {
+    gpui::Rgba {
+        r: 1.,
+        g: 1.,
+        b: 1.,
+        a: alpha,
+    }
+    .into()
+}
+
+fn black(alpha: f32) -> Hsla {
+    gpui::Rgba {
+        r: 0.,
+        g: 0.,
+        b: 0.,
+        a: alpha,
+    }
+    .into()
 }
 
 /// Titlebar behaviour for shell-drawn titlebar areas: drag moves the window,
@@ -1261,7 +1359,7 @@ fn pill_button(id: &'static str, title: &str, icon: IconName, p: Palette) -> Sta
         .items_center()
         .justify_center()
         .gap_2()
-        .rounded(px(8.))
+        .rounded(px(R_BUTTON))
         .border_1()
         .border_color(rgb(p.line))
         .bg(rgb(p.card))
