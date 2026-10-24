@@ -187,6 +187,14 @@ impl Store {
         self.write()
     }
 
+    /// A Space was deleted: everything it allowed goes with it.
+    pub fn forget_profile(&mut self, profile: &[u8; 16]) -> Result<()> {
+        if self.saved.profiles.remove(&profile_key(profile)).is_some() {
+            self.write()?;
+        }
+        Ok(())
+    }
+
     fn write(&self) -> Result<()> {
         use std::io::Write;
         let Some(path) = &self.path else {

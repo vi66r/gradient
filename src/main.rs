@@ -10,6 +10,7 @@ mod mcp;
 mod model;
 mod permissions;
 mod session;
+mod spaces;
 mod ui;
 mod zoom;
 
@@ -53,6 +54,11 @@ actions!(
         ZoomOut,
         ActualSize,
         Print,
+        NewSpace,
+        RenameSpace,
+        DeleteSpace,
+        NextSpace,
+        PreviousSpace,
         Quit
     ]
 );
@@ -136,6 +142,8 @@ enum TabCommand {
     Close,
     CloseOthers,
     CloseBelow,
+    /// Reload the tab in another Space, named by its ID.
+    MoveTo([u8; 16]),
 }
 
 #[derive(Clone, PartialEq, serde::Deserialize, Action)]
@@ -153,8 +161,22 @@ enum CopyTarget {
 
 struct Browser {
     // Native views must drop before the shared Linux WebContext.
+    /// The tabs of the Space on screen; see `spaces.rs`.
     tabs: Vec<Tab>,
+    /// The other Spaces' tabs, by Space ID. Their pages keep running.
+    parked: HashMap<[u8; 16], spaces::Parked>,
     context: wry::WebContext,
+    /// Every Space in switcher order, and which one is on screen.
+    spaces: Vec<spaces::Space>,
+    space: usize,
+    /// The Space to return to when the Private Space closes.
+    before_private: Option<[u8; 16]>,
+    /// Bumped on every switch, so the tab list fades in afresh.
+    space_epoch: u64,
+    /// The current Space's name while it is being edited in the switcher.
+    space_name: Entity<InputState>,
+    renaming: bool,
+    /// The current Space's data store; also keys its site permissions.
     profile: [u8; 16],
     active: usize,
     ids: engine::Ids,
@@ -212,13 +234,19 @@ impl Browser {
         store: session::Store,
         saved: Session,
         notice: Option<String>,
-        profile: [u8; 16],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let address =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search or enter address"));
         let find = cx.new(|cx| InputState::new(window, cx).placeholder("Find on page"));
+        let space_name = cx.new(|cx| InputState::new(window, cx).placeholder("Space name"));
+        let space_name_events =
+            cx.subscribe_in(&space_name, window, |this, _, event, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                    this.finish_rename(true, window, cx);
+                }
+            });
         let request_url = cx
             .new(|cx| InputState::new(window, cx).placeholder("https://api.example.com/v1/items"));
         let request_headers = cx.new(|cx| {
@@ -284,59 +312,23 @@ impl Browser {
             }
         })
         .detach();
-        let mut tabs: Vec<Tab> = saved
-            .tabs
-            .into_iter()
-            .enumerate()
-            .map(|(index, saved)| Tab {
-                id: index as u64 + 1,
-                saved,
-                private: false,
-                loading: false,
-                revision: 0,
-                media: None,
-                tint: None,
-                tint_epoch: 0,
-                zoom: 1.,
-                page: None,
-                error: None,
-                grant: None,
-                opener: None,
-                declined: Vec::new(),
-            })
-            .collect();
-        if tabs.is_empty() {
-            tabs.push(Tab {
-                id: 1,
-                saved: SavedTab {
-                    url: START.into(),
-                    title: "New tab".into(),
-                },
-                private: false,
-                loading: false,
-                revision: 0,
-                media: None,
-                tint: None,
-                tint_epoch: 0,
-                zoom: 1.,
-                page: None,
-                error: None,
-                grant: None,
-                opener: None,
-                declined: Vec::new(),
-            });
-        }
-        let active = saved.active.min(tabs.len() - 1);
-        let ids = engine::Ids::new(std::cell::Cell::new(tabs.len() as u64 + 1));
+        let restored = spaces::restore_session(saved);
+        let profile = restored.spaces[restored.current].id;
+        let active = restored.active;
+        let ids = engine::Ids::new(std::cell::Cell::new(restored.next_id));
         let permissions = permissions::Store::open(store.dir());
-        engine::set_notification_sites(
-            permissions.sites(&profile, permissions::Kind::Notifications),
-        );
         let icon_cache = favicon::DiskCache::new(store.dir());
         let zooms = zoom::Zooms::load(store.dir());
         let mut this = Self {
-            tabs,
+            tabs: restored.tabs,
+            parked: restored.parked,
             context: wry::WebContext::new(Some(session::data_dir().join("webkit"))),
+            spaces: restored.spaces,
+            space: restored.current,
+            before_private: None,
+            space_epoch: 0,
+            space_name,
+            renaming: false,
             profile,
             active,
             ids,
@@ -377,11 +369,13 @@ impl Browser {
             _subscriptions: vec![
                 address_events,
                 find_events,
+                space_name_events,
                 cx.observe_window_appearance(window, |this, window, cx| {
                     this.follow_appearance(window, cx)
                 }),
             ],
         };
+        engine::set_notification_sites(this.notification_sites());
         #[cfg(target_os = "macos")]
         engine::install_backdrop(window);
         this.follow_appearance(window, cx);
@@ -469,7 +463,7 @@ impl Browser {
         Theme::change(mode, Some(window), cx);
         // Pages re-report their colors themselves (theme observer); only the
         // fallback panel color depends on the shell's theme.
-        for tab in &self.tabs {
+        for tab in self.all_tabs() {
             if let Some(page) = &tab.page {
                 page.set_edge_color(ui::strip_color(tab.tint, self.dark));
             }
@@ -563,7 +557,21 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.tabs.len() >= 1000 {
+        // Private tabs live in the Private Space; everything opened there is
+        // private too.
+        let mut position = position;
+        if private && !self.current_space().private {
+            self.enter_private(window, cx);
+            position = 0;
+        }
+        // A Space's lone blank tab (a new Space, a fresh Private Space, the
+        // last tab closed) gives way to the next tab instead of trailing it.
+        let placeholder = (self.tabs.len() == 1
+            && self.tabs[0].saved.url == START
+            && self.tabs[0].page.is_none())
+        .then(|| self.tabs[0].id);
+        let private = private || self.current_space().private;
+        if self.all_tabs().count() >= 1000 {
             self.notice = Some("Tab limit reached.".into());
             return;
         }
@@ -571,6 +579,14 @@ impl Browser {
         // Newest first: the sidebar reads top-down from what you just opened.
         let position = position.min(self.tabs.len());
         self.tabs.insert(position, Tab::new(id, url, private));
+        if let Some(blank) = placeholder
+            && blank != id
+            && let Some(index) = self.tabs.iter().position(|tab| tab.id == blank)
+            && self.tabs[index].saved.url == START
+        {
+            self.tabs.remove(index);
+        }
+        let position = self.tabs.iter().position(|tab| tab.id == id).unwrap_or(0);
         self.activate(position, window, cx);
         if self.tabs[self.active].saved.url == START {
             self.focus_address(window, cx);
@@ -1017,7 +1033,9 @@ impl Browser {
         }
         drop(tab);
         self.prune_downloads();
-        if self.tabs.is_empty() {
+        if self.tabs.is_empty() && self.current_space().private {
+            self.leave_private(window, cx);
+        } else if self.tabs.is_empty() {
             self.new_tab(START.into(), false, window, cx);
         } else {
             let active = if index < self.active {
@@ -1093,6 +1111,18 @@ impl Browser {
                 }
             };
         }
+        let elsewhere: Vec<&spaces::Space> = self
+            .spaces
+            .iter()
+            .filter(|space| !space.private && space.id != self.profile)
+            .collect();
+        if !tab.private && !elsewhere.is_empty() {
+            let mut spaces = gpui::component::native_menu::NativeMenu::new();
+            for space in elsewhere {
+                spaces = spaces.menu(space.name.clone(), item(MoveTo(space.id)));
+            }
+            menu = menu.separator().submenu("Move to Space", spaces);
+        }
         menu.separator()
             .menu("Close Tab", item(Close))
             .menu_with_disabled("Close Other Tabs", self.tabs.len() < 2, item(CloseOthers))
@@ -1135,6 +1165,9 @@ impl Browser {
             Resume => self.ensure_page(index, window, cx),
             ToggleAgent => self.toggle_agent_for(index, window, cx),
             Close => self.close(index, window, cx),
+            MoveTo(space) => {
+                self.request_discard(lifecycle::Discard::MoveTab { id, space }, window, cx)
+            }
             CloseOthers | CloseBelow => {
                 let ids: Vec<u64> = self
                     .tabs
@@ -1159,7 +1192,8 @@ impl Browser {
     }
 
     fn media_changed(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) else {
+        let events = self.events.clone();
+        let Some(tab) = self.tab_mut(id) else {
             return;
         };
         let Some(page) = &tab.page else {
@@ -1174,7 +1208,7 @@ impl Browser {
             if state.playing {
                 media.held = false;
             }
-            page.request_media_session(id, self.events.clone());
+            page.request_media_session(id, events);
         } else if tab.media.is_some() {
             self.collapse_media_later(id, cx);
         }
@@ -1188,7 +1222,7 @@ impl Browser {
                 .await;
             let collapsed = this
                 .update(cx, |this, cx| {
-                    let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == id) else {
+                    let Some(tab) = this.tab_mut(id) else {
                         return false;
                     };
                     let idle = tab.page.as_ref().is_none_or(|page| {
@@ -1305,7 +1339,7 @@ impl Browser {
     /// the page's own background arrives; apply only colors that hold briefly
     /// so the strip doesn't flash on dark sites.
     fn settle_tint(&mut self, id: u64, tint: Option<u32>, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) else {
+        let Some(tab) = self.tab_mut(id) else {
             return;
         };
         tab.tint_epoch = tab.tint_epoch.wrapping_add(1);
@@ -1316,7 +1350,7 @@ impl Browser {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 let dark = this.dark;
-                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == id)
+                if let Some(tab) = this.tab_mut(id)
                     && tab.tint_epoch == epoch
                 {
                     tab.tint = tint;
@@ -1367,17 +1401,7 @@ impl Browser {
     }
 
     fn save(&mut self) -> bool {
-        let active_id = self.tabs[self.active].id;
-        let normal: Vec<_> = self.tabs.iter().filter(|tab| !tab.private).collect();
-        let active = normal
-            .iter()
-            .position(|tab| tab.id == active_id)
-            .unwrap_or(0);
-        let snapshot = Session {
-            version: 1,
-            tabs: normal.iter().map(|tab| tab.saved.clone()).collect(),
-            active,
-        };
+        let snapshot = self.session_snapshot();
         if let Err(error) = self.store.save(&snapshot) {
             self.notice = Some(format!("Session not saved: {error}"));
             return false;
@@ -1446,7 +1470,7 @@ impl Browser {
                 self.prompt_app_link(url, &app, &detail, Some(reply), window, cx);
             }
             engine::Event::Title(id, title) => {
-                if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
+                if let Some(tab) = self.tab_mut(id) {
                     tab.saved.title = title;
                     self.dirty = true;
                 }
@@ -1463,12 +1487,11 @@ impl Browser {
                         page.end_find();
                     }
                 }
-                if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
+                if let Some(tab) = self.tab_mut(id) {
                     tab.declined.clear();
                 }
                 if let Some(page) = self
-                    .tabs
-                    .iter()
+                    .all_tabs()
                     .find(|tab| tab.id == id)
                     .and_then(|tab| tab.page.as_ref())
                 {
@@ -1485,12 +1508,7 @@ impl Browser {
                 }
             }
             engine::Event::MediaSession { id, session } => {
-                if let Some(media) = self
-                    .tabs
-                    .iter_mut()
-                    .find(|tab| tab.id == id)
-                    .and_then(|tab| tab.media.as_mut())
-                {
+                if let Some(media) = self.tab_mut(id).and_then(|tab| tab.media.as_mut()) {
                     media.skips = session;
                 }
             }
@@ -1523,6 +1541,25 @@ impl Browser {
                     {
                         self.sync_address(window, cx);
                     }
+                } else if let Some(tab) = self.tab_mut(id) {
+                    // A page in a parked Space: keep its tab current for
+                    // when the Space comes back.
+                    if loading {
+                        tab.revision = tab.revision.wrapping_add(1);
+                        tab.media = None;
+                    }
+                    tab.loading = loading;
+                    if tab
+                        .grant
+                        .as_ref()
+                        .is_some_and(|(origin, _)| mcp::origin(&url).as_ref() != Some(origin))
+                    {
+                        tab.grant = None;
+                    }
+                    if model::allowed_address(&url) && url != "about:blank" {
+                        tab.saved.url = url;
+                        self.dirty = true;
+                    }
                 }
             }
             engine::Event::Opened {
@@ -1535,8 +1572,13 @@ impl Browser {
             engine::Event::Closed(id) => self.page_closed(id, window, cx),
             engine::Event::NotificationClicked(identifier) => {
                 // The page hears the click either way; its tab comes forward.
-                let tab = engine::notification_clicked(&identifier)
-                    .and_then(|id| self.tabs.iter().position(|tab| tab.id == id));
+                let tab = engine::notification_clicked(&identifier);
+                if let Some(id) = tab
+                    && let Some(space) = self.space_of(id)
+                {
+                    self.switch_space(space, window, cx);
+                }
+                let tab = tab.and_then(|id| self.tabs.iter().position(|tab| tab.id == id));
                 if let Some(index) = tab {
                     self.activate(index, window, cx);
                 }
@@ -1848,8 +1890,7 @@ impl Browser {
     }
 
     fn live_pages(&self, action: &lifecycle::Discard) -> Vec<lifecycle::LivePage> {
-        self.tabs
-            .iter()
+        self.all_tabs()
             .filter(|tab| action.includes(tab.id) && tab.page.is_some())
             .map(|tab| lifecycle::LivePage {
                 id: tab.id,
@@ -1893,8 +1934,7 @@ impl Browser {
         }
         let expected = self.live_pages(&action);
         let pages: Vec<_> = self
-            .tabs
-            .iter()
+            .all_tabs()
             .filter(|tab| action.includes(tab.id))
             .filter_map(|tab| tab.page.as_ref().map(|page| (tab.id, page.clone())))
             .collect();
@@ -1988,6 +2028,17 @@ impl Browser {
             self.finish_quit(cx);
             return;
         }
+        match &action {
+            Discard::MoveTab { id, space } => {
+                self.move_tab_unchecked(*id, *space, window, cx);
+                return;
+            }
+            Discard::DeleteSpace { space, .. } => {
+                self.delete_space_unchecked(*space, window, cx);
+                return;
+            }
+            _ => {}
+        }
         if let Discard::CloseTabs { keep, ids } = &action {
             self.close_tabs_unchecked(*keep, ids, window, cx);
             return;
@@ -2010,7 +2061,10 @@ impl Browser {
                 self.activate(index, window, cx);
                 self.navigate_unchecked(START.into(), window, cx);
             }
-            Discard::Quit | Discard::CloseTabs { .. } => unreachable!(),
+            Discard::Quit
+            | Discard::CloseTabs { .. }
+            | Discard::MoveTab { .. }
+            | Discard::DeleteSpace { .. } => unreachable!(),
         }
     }
 
@@ -2094,16 +2148,17 @@ fn main() -> anyhow::Result<()> {
     let mut store = session::Store::open(dir.clone())?;
     let (agent_send, agent_receive) = async_channel::bounded(32);
     mcp::start(&dir, agent_send)?;
-    let (saved, notice) = match store.load() {
+    // The data store sessions used before Spaces; it becomes the first Space.
+    let profile = profile_id(&dir)?;
+    let (saved, notice) = match store.load(profile) {
         Ok(saved) => (saved, None),
         Err(error) => (
-            Session::default(),
+            Session::fresh(profile),
             Some(format!(
                 "Recovery unavailable; original session preserved: {error}"
             )),
         ),
     };
-    let profile = profile_id(&dir)?;
     let initial = std::env::args()
         .nth(1)
         .map(|url| model::destination(&url))
@@ -2148,7 +2203,16 @@ fn main() -> anyhow::Result<()> {
             KeyBinding::new(&format!("{modifier}-0"), ActualSize, None),
             KeyBinding::new(&format!("{modifier}-p"), Print, None),
             KeyBinding::new(&format!("{modifier}-q"), Quit, None),
+            KeyBinding::new("ctrl-]", NextSpace, None),
+            KeyBinding::new("ctrl-[", PreviousSpace, None),
         ]);
+        cx.bind_keys((1..=9).map(|number| {
+            KeyBinding::new(
+                &format!("ctrl-{number}"),
+                spaces::SwitchSpace { index: number - 1 },
+                None,
+            )
+        }));
         cx.set_menus([
             Menu::new("Browser").items([MenuItem::action("Quit Browser", Quit)]),
             Menu::new("File").items([
@@ -2187,6 +2251,14 @@ fn main() -> anyhow::Result<()> {
                 MenuItem::action("Next Tab", NextTab),
                 MenuItem::action("Previous Tab", PreviousTab),
             ]),
+            Menu::new("Spaces").items([
+                MenuItem::action("New Space", NewSpace),
+                MenuItem::action("Rename Space…", RenameSpace),
+                MenuItem::action("Delete Space…", DeleteSpace),
+                MenuItem::separator(),
+                MenuItem::action("Next Space", NextSpace),
+                MenuItem::action("Previous Space", PreviousSpace),
+            ]),
             Menu::new("Tools").items([
                 MenuItem::action("Request Lab", RequestLab),
                 MenuItem::action("Inspect Page", Inspect),
@@ -2220,7 +2292,7 @@ fn main() -> anyhow::Result<()> {
             cx,
             |window, cx| {
                 cx.new(|cx| {
-                    let mut browser = Browser::new(store, saved, notice, profile, window, cx);
+                    let mut browser = Browser::new(store, saved, notice, window, cx);
                     if let Some(url) = initial {
                         browser.navigate(url, window, cx);
                     }

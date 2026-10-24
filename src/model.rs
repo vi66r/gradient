@@ -273,37 +273,120 @@ pub struct SavedTab {
     pub title: String,
 }
 
+/// How many colors a Space can take; see `ui::space_color`.
+pub const SPACE_COLORS: u8 = 8;
+/// More Spaces than this is a corrupt or hostile session file.
+pub const MAX_SPACES: usize = 32;
+/// Longest Space name, in characters.
+pub const SPACE_NAME_MAX: usize = 40;
+
+/// A Space as saved: its own website data (`id` names the WebKit data store),
+/// tabs and color. The Private Space is never saved.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Session {
-    pub version: u32,
+pub struct SavedSpace {
+    pub id: String,
+    pub name: String,
+    pub color: u8,
     pub tabs: Vec<SavedTab>,
     pub active: usize,
 }
 
-impl Default for Session {
-    fn default() -> Self {
+impl SavedSpace {
+    /// The Space every profile starts with. It keeps the profile's original
+    /// data store, so sign-ins from before Spaces carry over.
+    pub fn first(profile: [u8; 16], tabs: Vec<SavedTab>, active: usize) -> Self {
         Self {
-            version: 1,
-            tabs: vec![SavedTab {
-                url: START.into(),
-                title: "New tab".into(),
-            }],
-            active: 0,
+            id: uuid::Uuid::from_bytes(profile).to_string(),
+            name: "Personal".into(),
+            color: 0,
+            tabs,
+            active,
         }
+    }
+
+    pub fn profile(&self) -> Option<[u8; 16]> {
+        uuid::Uuid::parse_str(&self.id)
+            .ok()
+            .map(|id| *id.as_bytes())
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Session {
+    pub version: u32,
+    pub spaces: Vec<SavedSpace>,
+    pub current: usize,
+}
+
+/// The single tab list sessions held before Spaces.
+#[derive(Deserialize)]
+struct LegacySession {
+    tabs: Vec<SavedTab>,
+    active: usize,
+}
+
 impl Session {
+    pub fn fresh(profile: [u8; 16]) -> Self {
+        Self {
+            version: 2,
+            spaces: vec![SavedSpace::first(
+                profile,
+                vec![SavedTab {
+                    url: START.into(),
+                    title: "New tab".into(),
+                }],
+                0,
+            )],
+            current: 0,
+        }
+    }
+
+    /// Reads a saved session. One from before Spaces becomes a single
+    /// Space on the profile's original data store.
+    pub fn parse(bytes: &[u8], profile: [u8; 16]) -> Result<Self> {
+        let value: serde_json::Value = serde_json::from_slice(bytes)?;
+        let session = if value.get("version").and_then(|version| version.as_u64()) == Some(1) {
+            let legacy: LegacySession = serde_json::from_value(value)?;
+            Self {
+                version: 2,
+                spaces: vec![SavedSpace::first(profile, legacy.tabs, legacy.active)],
+                current: 0,
+            }
+        } else {
+            serde_json::from_value(value)?
+        };
+        session.validate()?;
+        Ok(session)
+    }
+
     pub fn validate(&self) -> Result<()> {
-        if self.version != 1 {
+        if self.version != 2 {
             bail!("This session was created by an unsupported Browser version.");
         }
-        if self.tabs.len() > 1000 {
+        if self.spaces.is_empty() || self.spaces.len() > MAX_SPACES {
+            bail!("The session has an unsupported number of Spaces.");
+        }
+        if self
+            .spaces
+            .iter()
+            .map(|space| space.tabs.len())
+            .sum::<usize>()
+            > 1000
+        {
             bail!("The session contains too many tabs.");
         }
-        for tab in &self.tabs {
-            if tab.url != START && !allowed_address(&tab.url) {
-                bail!("The session contains an unsupported address.");
+        let mut ids = std::collections::HashSet::new();
+        for space in &self.spaces {
+            if space.profile().is_none() || !ids.insert(&space.id) {
+                bail!("The session contains an invalid Space.");
+            }
+            if space.name.chars().count() > SPACE_NAME_MAX || space.color >= SPACE_COLORS {
+                bail!("The session contains an invalid Space.");
+            }
+            for tab in &space.tabs {
+                if tab.url != START && !allowed_address(&tab.url) {
+                    bail!("The session contains an unsupported address.");
+                }
             }
         }
         Ok(())
@@ -450,24 +533,41 @@ mod tests {
         std::fs::remove_file(&file).unwrap();
         assert!(file_problem(&url).unwrap().contains("couldn't be found"));
         // A missing file still restores; the tab shows the error instead.
-        let session = Session {
-            version: 1,
-            tabs: vec![SavedTab {
-                url,
-                title: String::new(),
-            }],
-            active: 0,
-        };
+        let mut session = Session::fresh([7; 16]);
+        session.spaces[0].tabs = vec![SavedTab {
+            url,
+            title: String::new(),
+        }];
         assert!(session.validate().is_ok());
     }
 
     #[test]
     fn unsupported_sessions_are_rejected_instead_of_silently_replaced() {
         let session = Session {
-            version: 2,
-            ..Session::default()
+            version: 3,
+            ..Session::fresh([7; 16])
         };
         assert!(session.validate().is_err());
+        let mut twins = Session::fresh([7; 16]);
+        twins.spaces.push(twins.spaces[0].clone());
+        assert!(twins.validate().is_err());
+        let mut nameless = Session::fresh([7; 16]);
+        nameless.spaces[0].id = "not a uuid".into();
+        assert!(nameless.validate().is_err());
+    }
+
+    #[test]
+    fn sessions_from_before_spaces_become_one_space_on_the_original_store() {
+        let legacy = br#"{"version":1,"tabs":[{"url":"https://example.com/","title":"Example"}],"active":0}"#;
+        let session = Session::parse(legacy, [7; 16]).unwrap();
+        assert_eq!(session.version, 2);
+        assert_eq!(session.spaces.len(), 1);
+        assert_eq!(session.spaces[0].profile(), Some([7; 16]));
+        assert_eq!(session.spaces[0].name, "Personal");
+        assert_eq!(session.spaces[0].tabs[0].url, "https://example.com/");
+        // Spaces round-trip as written.
+        let saved = serde_json::to_vec(&session).unwrap();
+        assert_eq!(Session::parse(&saved, [9; 16]).unwrap(), session);
     }
 
     #[test]

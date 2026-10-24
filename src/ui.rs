@@ -92,13 +92,20 @@ impl Browser {
             .w(px(SIDEBAR))
             .flex_shrink_0()
             .h_full()
-            // The traffic lights' row; the Spaces switcher will live here.
+            // The traffic lights' row, with the Spaces switcher beside them.
             .child(
                 div()
                     .id("sidebar-titlebar")
                     .h(px(CONTROL_ZONE))
                     .flex_shrink_0()
-                    .on_mouse_down(MouseButton::Left, move_window),
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    // Clear of the traffic lights.
+                    .pl(px(76.))
+                    .pr_2()
+                    .on_mouse_down(MouseButton::Left, move_window)
+                    .child(self.space_switcher(p, cx)),
             )
             .child(
                 div()
@@ -131,7 +138,13 @@ impl Browser {
                                 this.new_tab(START.into(), false, w, cx)
                             })),
                     )
-                    .children((0..self.tabs.len()).map(|index| self.tab_row(index, p, window, cx))),
+                    .children((0..self.tabs.len()).map(|index| self.tab_row(index, p, window, cx)))
+                    // A Space's tabs arrive together, like a page does.
+                    .with_animation(
+                        ("space-tabs", self.space_epoch),
+                        Animation::new(NORMAL).with_easing(ease_out_quint()),
+                        |list, delta| list.opacity(0.35 + 0.65 * delta),
+                    ),
             )
             // The footer: downloads, when there are any, then the tools.
             // Tools: Request Lab as a labeled row (discoverable, shows when
@@ -376,6 +389,171 @@ impl Browser {
             )
             .child(actions)
             .children(bar)
+    }
+
+    /// The current Space as a pill with its name, the others as dots, and a
+    /// button for a new one. Right-click a Space for its menu; double-click
+    /// the current one to rename it.
+    fn space_switcher(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let wash = if self.dark { 0xffffff14 } else { 0x0000000d };
+        let saved = self.spaces.iter().filter(|space| !space.private).count();
+        let chips =
+            self.spaces.iter().enumerate().map(|(index, space)| {
+                let current = index == self.space;
+                let color = space_color(space, self.dark);
+                let id = space.id;
+                let shortcut = (index < 9 && !space.private).then(|| format!("  ⌃{}", index + 1));
+                let tip: SharedString =
+                    format!("{}{}", space.name, shortcut.unwrap_or_default()).into();
+                let mark = if space.private {
+                    Icon::new(IconName::Lock)
+                        .size_3()
+                        .text_color(rgb(color))
+                        .into_any_element()
+                } else {
+                    div()
+                        .size(px(if current { 8. } else { 7. }))
+                        .flex_shrink_0()
+                        .rounded_full()
+                        .bg(rgb(color))
+                        .into_any_element()
+                };
+                let chip = div()
+                    .id(("space", index))
+                    .role(Role::Tab)
+                    .aria_label(space.name.clone())
+                    .aria_selected(current)
+                    .h(px(24.))
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .rounded_full()
+                    .cursor_pointer()
+                    // Chips are controls, not titlebar.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.space_menu(id, event.position, window, cx);
+                        }),
+                    );
+                if !current {
+                    return chip
+                        .w(px(24.))
+                        .justify_center()
+                        .opacity(0.8)
+                        .hover(move |s| s.bg(rgba(wash)).opacity(1.))
+                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                        .child(mark)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.switch_space(index, window, cx)
+                        }))
+                        .into_any_element();
+                }
+                let label = if self.renaming {
+                    div()
+                        .w(px(88.))
+                        .min_w_0()
+                        .child(
+                            Input::new(&self.space_name)
+                                .appearance(false)
+                                .aria_label("Space name")
+                                .h(px(22.))
+                                .py_0()
+                                .px_0()
+                                .text_size(px(12.)),
+                        )
+                        .into_any_element()
+                } else {
+                    div()
+                        .min_w_0()
+                        .max_w(px(96.))
+                        .truncate()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(p.ink))
+                        .child(space.name.clone())
+                        .into_any_element()
+                };
+                // The current Space gives way first when the row runs out of room.
+                chip.min_w_0()
+                    .flex_shrink(1.)
+                    .pl(px(9.))
+                    .pr(px(10.))
+                    .gap(px(7.))
+                    .bg(rgba(wash))
+                    .child(mark)
+                    .child(label)
+                    .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                        if event.click_count() == 2 {
+                            this.begin_rename(window, cx);
+                        }
+                    }))
+                    // A click anywhere else keeps the name, as in Finder;
+                    // empty areas don't take focus, so blur alone can miss it.
+                    .when(self.renaming, |pill| {
+                        pill.on_mouse_down_out(
+                            cx.listener(|this, _, window, cx| this.finish_rename(true, window, cx)),
+                        )
+                    })
+                    .into_any_element()
+            });
+        div()
+            .flex()
+            .items_center()
+            .min_w_0()
+            .gap_0p5()
+            .children(chips)
+            .when(saved < model::MAX_SPACES, |row| {
+                row.child(
+                    div()
+                        .id("new-space")
+                        .role(Role::Button)
+                        .aria_label("New Space")
+                        .size(px(24.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .cursor_pointer()
+                        .text_color(rgb(p.muted))
+                        .hover(move |s| s.bg(rgba(wash)).text_color(rgb(p.ink)))
+                        .tooltip(|window, cx| Tooltip::new("New Space").build(window, cx))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(Icon::new(IconName::Plus).size_3p5())
+                        .on_click(cx.listener(|this, _, window, cx| this.new_space(window, cx))),
+                )
+            })
+    }
+
+    /// The window ground: the shell's chrome veil, tinted toward the current
+    /// Space's color so each Space is recognizable at a glance.
+    fn space_veil(&self, p: Palette, window: &mut Window, cx: &mut Context<Self>) -> Hsla {
+        let space = self.current_space();
+        let amount = match (space.private, space.color, self.dark) {
+            (true, _, true) => 0.22,
+            (true, _, false) => 0.16,
+            (false, 0, _) => 0.,
+            (false, _, true) => 0.14,
+            (false, _, false) => 0.10,
+        };
+        let target = motion::Interpolate::interpolate(
+            &Rgb::from(p.chrome),
+            &Rgb::from(space_color(space, self.dark)),
+            amount,
+        );
+        let Rgb([r, g, b]) =
+            motion::transition("space-veil", target, Transition::new(NORMAL), window, cx);
+        let alpha = if self.dark { 0x59 } else { 0x40 };
+        gpui::Rgba {
+            r,
+            g,
+            b,
+            a: alpha as f32 / 255.,
+        }
+        .into()
     }
 
     fn tab_row(
@@ -967,7 +1145,7 @@ impl Render for Browser {
             .track_focus(&self.focus)
             .size_full()
             .flex()
-            .bg(frosted(p.chrome, self.dark))
+            .bg(self.space_veil(p, window, cx))
             .text_color(rgb(p.ink))
             .font_family(if cfg!(target_os = "macos") {
                 ".AppleSystemUIFont"
@@ -983,6 +1161,22 @@ impl Render for Browser {
                 }),
             )
             .on_action(cx.listener(|this, _: &OpenFile, w, cx| this.prompt_open_file(w, cx)))
+            .on_action(cx.listener(|this, _: &NewSpace, w, cx| this.new_space(w, cx)))
+            .on_action(cx.listener(|this, _: &RenameSpace, w, cx| this.begin_rename(w, cx)))
+            .on_action(cx.listener(|this, _: &DeleteSpace, w, cx| {
+                let id = this.current_space().id;
+                this.delete_space(id, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NextSpace, w, cx| this.switch_space_by(1, w, cx)))
+            .on_action(
+                cx.listener(|this, _: &PreviousSpace, w, cx| this.switch_space_by(-1, w, cx)),
+            )
+            .on_action(cx.listener(|this, action: &spaces::SwitchSpace, w, cx| {
+                this.switch_space(action.index, w, cx)
+            }))
+            .on_action(cx.listener(|this, action: &spaces::SpaceMenu, w, cx| {
+                this.space_command(action, w, cx)
+            }))
             // Files dropped on the shell (sidebar, start or resting page). The
             // native page takes its own drops; see `engine::Page::create`.
             .on_drop(cx.listener(|this, paths: &ExternalPaths, w, cx| {
@@ -997,6 +1191,10 @@ impl Render for Browser {
             .on_action(cx.listener(|this, _: &FocusAddress, w, cx| this.focus_address(w, cx)))
             .on_action(
                 cx.listener(|this, _: &gpui::component::input::Escape, w, cx| {
+                    if this.renaming {
+                        this.finish_rename(false, w, cx);
+                        return;
+                    }
                     if this.find.read(cx).focus_handle(cx).is_focused(w) {
                         this.close_find(w, cx);
                     } else if this.address_focused(w, cx) {
@@ -1658,9 +1856,39 @@ fn readable_on(background: u32) -> u32 {
 
 /// A light veil of our palette over the system sidebar material, so the frost
 /// keeps the shell's tone while the desktop still shows through.
-fn frosted(chrome: u32, dark: bool) -> Hsla {
-    let alpha = if dark { 0x59 } else { 0x40 };
-    rgba((chrome << 8) | alpha).into()
+/// Space colors as (name, light, dark). Gray is the untinted default.
+const SPACE_COLORS: [(&str, u32, u32); model::SPACE_COLORS as usize] = [
+    ("Gray", 0x8b919c, 0x8b919c),
+    ("Blue", 0x3b82f6, 0x60a5fa),
+    ("Purple", 0x8b5cf6, 0xa78bfa),
+    ("Pink", 0xec4899, 0xf472b6),
+    ("Orange", 0xf97316, 0xfb923c),
+    ("Yellow", 0xeab308, 0xfacc15),
+    ("Green", 0x22c55e, 0x4ade80),
+    ("Teal", 0x14b8a6, 0x2dd4bf),
+];
+/// The Private Space's own color, outside the user's choices.
+const PRIVATE_COLOR: (u32, u32) = (0x6d5bd0, 0x8b7cf0);
+
+pub(crate) fn space_color_name(color: u8) -> &'static str {
+    SPACE_COLORS
+        .get(color as usize)
+        .map_or("Gray", |(name, _, _)| name)
+}
+
+fn space_color(space: &spaces::Space, dark: bool) -> u32 {
+    if space.private {
+        return if dark {
+            PRIVATE_COLOR.1
+        } else {
+            PRIVATE_COLOR.0
+        };
+    }
+    let (_, light, night) = SPACE_COLORS
+        .get(space.color as usize)
+        .copied()
+        .unwrap_or(SPACE_COLORS[0]);
+    if dark { night } else { light }
 }
 
 /// A translucent hairline, so the edge reads as light rather than a stroke.

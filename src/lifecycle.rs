@@ -40,6 +40,16 @@ pub enum Discard {
     },
     Suspend(u64),
     Start(u64),
+    /// Reload a tab in another Space (`space` names it).
+    MoveTab {
+        id: u64,
+        space: [u8; 16],
+    },
+    /// Close every tab of a Space and erase it.
+    DeleteSpace {
+        space: [u8; 16],
+        ids: Vec<u64>,
+    },
     Quit,
 }
 
@@ -53,7 +63,8 @@ impl Discard {
     pub fn includes(&self, id: u64) -> bool {
         match self {
             Self::Close(target) | Self::Suspend(target) | Self::Start(target) => *target == id,
-            Self::CloseTabs { ids, .. } => ids.contains(&id),
+            Self::MoveTab { id: target, .. } => *target == id,
+            Self::CloseTabs { ids, .. } | Self::DeleteSpace { ids, .. } => ids.contains(&id),
             Self::Quit => true,
         }
     }
@@ -79,6 +90,16 @@ impl Discard {
                 "Return to the start page?",
                 "Leave page",
                 "This page has edits you haven’t saved. Open a new tab instead to keep them.",
+            ),
+            Self::MoveTab { .. } => (
+                "Move this tab?",
+                "Move tab",
+                "This page has edits you haven’t saved. Spaces don’t share website data, so the page reloads in the other Space and the edits are discarded.",
+            ),
+            Self::DeleteSpace { .. } => (
+                "Delete this Space?",
+                "Delete Space",
+                "Some of its tabs have edits you haven’t saved. Deleting the Space discards them.",
             ),
             Self::Quit => (
                 "Quit Browser?",

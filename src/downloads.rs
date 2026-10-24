@@ -161,13 +161,12 @@ impl crate::Browser {
         let popup = tab;
         let tab = self.popups.get(&popup).copied().unwrap_or(popup);
         // A popup that closed to hand its download back is done with.
-        if !self.tabs.iter().any(|candidate| candidate.id == popup) {
+        if !self.all_tabs().any(|candidate| candidate.id == popup) {
             self.popups.remove(&popup);
         }
         // A tab that's already gone can't vouch that it was normal.
         let private = self
-            .tabs
-            .iter()
+            .all_tabs()
             .find(|candidate| candidate.id == tab)
             .is_none_or(|tab| tab.private);
         self.downloads.insert(
@@ -263,7 +262,7 @@ impl crate::Browser {
     /// A private tab's downloads are forgotten once it closes. One still in
     /// flight keeps its row (and Cancel) until it ends.
     pub(crate) fn prune_downloads(&mut self) {
-        let tabs: Vec<u64> = self.tabs.iter().map(|tab| tab.id).collect();
+        let tabs: Vec<u64> = self.all_tabs().map(|tab| tab.id).collect();
         self.downloads.retain(|download| {
             !download.private || download.active() || tabs.contains(&download.tab)
         });

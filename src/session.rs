@@ -57,19 +57,18 @@ impl Store {
         &self.dir
     }
 
-    pub fn load(&mut self) -> Result<Session> {
+    /// `profile` is the data store a session from before Spaces used.
+    pub fn load(&mut self, profile: [u8; 16]) -> Result<Session> {
         let path = self.dir.join("session.json");
         if !path.exists() {
-            return Ok(Session::default());
+            return Ok(Session::fresh(profile));
         }
         let result = (|| {
             anyhow::ensure!(
                 fs::metadata(&path)?.len() <= 4 * 1024 * 1024,
                 "Session file is too large."
             );
-            let session: Session = serde_json::from_slice(&fs::read(&path)?)?;
-            session.validate()?;
-            Ok(session)
+            Session::parse(&fs::read(&path)?, profile)
         })();
         if result.is_err() {
             self.writable = false;
@@ -100,11 +99,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().into()).unwrap();
         assert!(Store::open(dir.path().into()).is_err());
-        let original = Session::default();
+        let original = Session::fresh([7; 16]);
         store.save(&original).unwrap();
         drop(store);
         let mut reopened = Store::open(dir.path().into()).unwrap();
-        assert_eq!(reopened.load().unwrap(), original);
+        assert_eq!(reopened.load([9; 16]).unwrap(), original);
     }
     #[test]
     fn corrupt_session_stays_byte_for_byte_intact() {
@@ -112,8 +111,8 @@ mod tests {
         let path = dir.path().join("session.json");
         fs::write(&path, b"unfinished snapshot").unwrap();
         let mut store = Store::open(dir.path().into()).unwrap();
-        assert!(store.load().is_err());
-        assert!(store.save(&Session::default()).is_err());
+        assert!(store.load([7; 16]).is_err());
+        assert!(store.save(&Session::fresh([7; 16])).is_err());
         assert_eq!(fs::read(path).unwrap(), b"unfinished snapshot");
     }
 }

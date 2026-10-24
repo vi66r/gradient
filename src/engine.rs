@@ -1041,6 +1041,57 @@ fn native_host_needs_update(page: &Page, bounds: Bounds<Pixels>) -> bool {
     host.0.isHidden() || host.0.frame() != native_frame(&container, bounds)
 }
 
+#[cfg(target_os = "macos")]
+thread_local! {
+    /// One throwaway store per Private Space, so its tabs share sign-ins with
+    /// each other and with nothing else. See `forget_private_store`.
+    static PRIVATE_STORES: std::cell::RefCell<
+        std::collections::HashMap<[u8; 16], objc2::rc::Retained<objc2_web_kit::WKWebsiteDataStore>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// A Private Space closed: its website data goes with it once its last page
+/// is gone.
+pub fn forget_private_store(profile: [u8; 16]) {
+    #[cfg(target_os = "macos")]
+    PRIVATE_STORES.with_borrow_mut(|stores| stores.remove(&profile));
+    #[cfg(not(target_os = "macos"))]
+    let _ = profile;
+}
+
+/// Erases a deleted Space's website data store (cookies, storage, caches).
+/// WebKit refuses while a page still uses it; a failure is reported.
+pub fn remove_data_store(profile: [u8; 16], events: Sender<Event>) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::{NSError, NSUUID};
+        use objc2_web_kit::WKWebsiteDataStore;
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        let done = block2::RcBlock::new(move |error: *mut NSError| {
+            if let Some(error) = unsafe { error.as_ref() } {
+                log::warn!(
+                    "Removing a Space's data store: {}",
+                    error.localizedDescription()
+                );
+                let _ = events.try_send(Event::Notice(
+                    "The deleted Space’s website data couldn’t be erased.".into(),
+                ));
+            }
+        });
+        unsafe {
+            WKWebsiteDataStore::removeDataStoreForIdentifier_completionHandler(
+                &NSUUID::from_bytes(profile),
+                &done,
+                mtm,
+            )
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (profile, events);
+}
+
 /// The page's WebKit configuration. Wry skips its own data-store setup when
 /// given one, so this applies the same rules: an ephemeral store for private
 /// tabs, the profile's persistent store otherwise. On top of that:
@@ -1064,7 +1115,12 @@ fn page_configuration(
     let mtm = objc2::MainThreadMarker::new().expect("Pages are created on the UI thread");
     let config = unsafe { WKWebViewConfiguration::new(mtm) };
     let store = if private {
-        unsafe { WKWebsiteDataStore::nonPersistentDataStore(mtm) }
+        PRIVATE_STORES.with_borrow_mut(|stores| {
+            stores
+                .entry(profile)
+                .or_insert_with(|| unsafe { WKWebsiteDataStore::nonPersistentDataStore(mtm) })
+                .clone()
+        })
     } else {
         unsafe { WKWebsiteDataStore::dataStoreForIdentifier(&NSUUID::from_bytes(profile), mtm) }
     };
