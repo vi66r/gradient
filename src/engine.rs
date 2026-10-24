@@ -9,6 +9,8 @@ pub enum Event {
     QuitRequested,
     /// A page started or stopped playing audio or a media session.
     MediaChanged(u64),
+    /// A new main-frame document committed (not same-document navigation).
+    Committed(u64),
     /// The page's own color (`0xRRGGBB`), for the control zone above it.
     PageTint(u64, Option<u32>),
     /// Whether a page publishes Media Session metadata (track controls).
@@ -123,6 +125,11 @@ pub struct Page {
     attaching: Cell<bool>,
     #[cfg(target_os = "macos")]
     host: std::cell::RefCell<Option<NativeHost>>,
+    /// The top-edge dissolve into the control strip, and its color.
+    #[cfg(target_os = "macos")]
+    edge: std::cell::RefCell<Option<objc2::rc::Retained<fade::EdgeFade>>>,
+    #[cfg(target_os = "macos")]
+    edge_color: Cell<u32>,
 }
 
 impl Drop for Page {
@@ -323,6 +330,10 @@ impl Page {
             attaching: Cell::new(false),
             #[cfg(target_os = "macos")]
             host: std::cell::RefCell::new(None),
+            #[cfg(target_os = "macos")]
+            edge: std::cell::RefCell::new(None),
+            #[cfg(target_os = "macos")]
+            edge_color: Cell::new(0xffffff),
         });
         page.load(url)?;
         Ok(page)
@@ -354,6 +365,28 @@ impl Page {
     pub fn pause_media(&self) {
         #[cfg(target_os = "macos")]
         self.media.pause();
+    }
+
+    /// The control strip's color above this page, for the edge dissolve.
+    pub fn set_edge_color(&self, color: u32) {
+        #[cfg(target_os = "macos")]
+        {
+            self.edge_color.set(color);
+            if let Some(edge) = self.edge.borrow().as_ref() {
+                edge.set_color(color);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = color;
+    }
+
+    /// Fades a newly committed document in.
+    pub fn fade_in(&self) {
+        #[cfg(target_os = "macos")]
+        {
+            use wry::WebViewExtMacOS;
+            fade::fade_in(&self.raw.webview());
+        }
     }
 
     /// Reads the page's color; the answer arrives as `Event::PageTint`.
@@ -709,6 +742,9 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
                 NSAutoresizingMaskOptions::ViewWidthSizable
                     | NSAutoresizingMaskOptions::ViewHeightSizable,
             );
+            // Above the page, so it dissolves into the control strip.
+            *page.edge.borrow_mut() =
+                Some(fade::EdgeFade::attach(&host, mtm, page.edge_color.get()));
             *page.host.borrow_mut() = Some(NativeHost(host));
         }
         if let Some(host) = page.host.borrow().as_ref() {
@@ -789,6 +825,8 @@ mod protection;
 #[cfg(target_os = "macos")]
 mod app_link;
 
+#[cfg(target_os = "macos")]
+mod fade;
 #[cfg(target_os = "macos")]
 mod media;
 #[cfg(target_os = "macos")]

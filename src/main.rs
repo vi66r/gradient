@@ -365,6 +365,7 @@ impl Browser {
         // Pages may publish a different theme-color for light and dark.
         for tab in &self.tabs {
             if let Some(page) = &tab.page {
+                page.set_edge_color(ui::strip_color(tab.tint, self.dark));
                 page.request_theme(tab.id, self.events.clone());
             }
         }
@@ -405,6 +406,7 @@ impl Browser {
             cx,
         ) {
             Ok(page) => {
+                page.set_edge_color(ui::strip_color(tab.tint, self.dark));
                 tab.revision = tab.revision.wrapping_add(1);
                 tab.page = Some(page);
                 tab.loading = true;
@@ -1083,8 +1085,34 @@ impl Browser {
             }
             engine::Event::MediaChanged(id) => self.media_changed(id, cx),
             engine::Event::PageTint(id, tint) => {
+                let dark = self.dark;
                 if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
                     tab.tint = tint;
+                    if let Some(page) = &tab.page {
+                        page.set_edge_color(ui::strip_color(tint, dark));
+                    }
+                }
+            }
+            engine::Event::Committed(id) => {
+                if let Some(page) = self
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .and_then(|tab| tab.page.clone())
+                {
+                    if !cx.reduce_motion() {
+                        page.fade_in();
+                    }
+                    // Read the new site's color early so the strip's change
+                    // runs with the fade; it's read again when loading ends.
+                    let events = self.events.clone();
+                    cx.spawn(async move |_, cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(120))
+                            .await;
+                        page.request_theme(id, events);
+                    })
+                    .detach();
                 }
             }
             engine::Event::MediaSession { id, session } => {

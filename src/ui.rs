@@ -952,8 +952,21 @@ impl Browser {
             .flex()
             .items_center()
             .gap_0p5()
-            .bg(rgb(background))
-            .text_color(rgb(ink))
+            // Eased with the page's fade-in, so a new site arrives as one.
+            .bg(Hsla::from(motion::transition(
+                "strip-background",
+                Rgb::from(background),
+                Transition::new(NORMAL),
+                window,
+                cx,
+            )))
+            .text_color(motion::transition(
+                "strip-ink",
+                Rgb::from(ink),
+                Transition::new(NORMAL),
+                window,
+                cx,
+            ))
             .child(
                 strip_button("back", "Back", IconName::ChevronLeft, wash)
                     .on_click(cx.listener(|this, _, _, _| this.history(false))),
@@ -1143,6 +1156,36 @@ fn strip_button(id: &'static str, title: &str, icon: IconName, wash: u32) -> Sta
         .child(Icon::new(icon).size_4())
 }
 
+/// A color that eases in RGB. GPUI's `Hsla` interpolates hue, so white to
+/// navy swept through teal; a straight RGB blend reads as one color change.
+#[derive(Clone, Copy, PartialEq)]
+struct Rgb([f32; 3]);
+
+impl From<u32> for Rgb {
+    fn from(color: u32) -> Self {
+        let channel = |shift: u32| ((color >> shift) & 0xff) as f32 / 255.;
+        Rgb([channel(16), channel(8), channel(0)])
+    }
+}
+
+impl motion::Interpolate for Rgb {
+    fn interpolate(&self, target: &Self, progress: f32) -> Self {
+        let mix = |i: usize| self.0[i] + (target.0[i] - self.0[i]) * progress;
+        Rgb([mix(0), mix(1), mix(2)])
+    }
+}
+
+impl From<Rgb> for Hsla {
+    fn from(Rgb([r, g, b]): Rgb) -> Self {
+        gpui::Rgba { r, g, b, a: 1. }.into()
+    }
+}
+
+/// The control strip's color for a page: its own tint, else the panel color.
+pub(crate) fn strip_color(tint: Option<u32>, dark: bool) -> u32 {
+    tint.unwrap_or(palette(dark).card)
+}
+
 /// Dark or light text, whichever reads on `background` (`0xRRGGBB`).
 fn readable_on(background: u32) -> u32 {
     let channel = |shift: u32| {
@@ -1237,4 +1280,27 @@ fn label(text: &'static str, p: Palette) -> impl IntoElement {
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(p.muted))
         .child(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::base::motion::Interpolate;
+
+    // `crate::*` brings in GPUI's own `test` macro; use the standard one.
+    #[core::prelude::v1::test]
+    fn strip_colors_blend_in_rgb_not_through_other_hues() {
+        // White to navy used to pass through teal (hue interpolation).
+        let mid = Rgb::from(0xffffff).interpolate(&Rgb::from(0x1f2a44), 0.5);
+        let expected = [
+            (1. + 31. / 255.) / 2.,
+            (1. + 42. / 255.) / 2.,
+            (1. + 68. / 255.) / 2.,
+        ];
+        for (got, want) in mid.0.iter().zip(expected) {
+            assert!((got - want).abs() < 1e-6, "{:?}", mid.0);
+        }
+        // Blue stays the strongest channel all the way, as navy's is.
+        assert!(mid.0[2] > mid.0[1] && mid.0[1] > mid.0[0]);
+    }
 }

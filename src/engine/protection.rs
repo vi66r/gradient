@@ -300,6 +300,7 @@ define_class!(
 
         #[unsafe(method(webView:didCommitNavigation:))]
         unsafe fn committed(&self, view: &WKWebView, navigation: Option<&WKNavigation>) {
+            let _ = self.ivars().events.try_send(Event::Committed(self.ivars().id));
             self.ivars().approved.borrow_mut().take();
             self.ivars().declined.borrow_mut().clear();
             unsafe { self.ivars().original.webView_didCommitNavigation(view, navigation); }
