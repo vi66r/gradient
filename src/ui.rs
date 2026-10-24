@@ -73,6 +73,8 @@ const R_CONTROL: f32 = 12.;
 const R_BUTTON: f32 = 10.;
 /// Height of the media controls a playing tab's sidebar cell grows by.
 const MEDIA_STRIP: f32 = 30.;
+/// The find bar's width when open; it eases open from nothing.
+const FIND_BAR: f32 = 264.;
 const FAST: Duration = Duration::from_millis(140);
 const NORMAL: Duration = Duration::from_millis(200);
 
@@ -809,7 +811,9 @@ impl Render for Browser {
             .on_action(cx.listener(|this, _: &FocusAddress, w, cx| this.focus_address(w, cx)))
             .on_action(
                 cx.listener(|this, _: &gpui::component::input::Escape, w, cx| {
-                    if this.address_focused(w, cx) {
+                    if this.find.read(cx).focus_handle(cx).is_focused(w) {
+                        this.close_find(w, cx);
+                    } else if this.address_focused(w, cx) {
                         this.release_address(w, cx);
                     } else {
                         cx.propagate();
@@ -833,6 +837,13 @@ impl Render for Browser {
                     page.raw.open_devtools();
                 }
             }))
+            .on_action(cx.listener(|this, _: &Find, w, cx| this.open_find(w, cx)))
+            .on_action(cx.listener(|this, _: &FindNext, w, cx| this.find_step(true, w, cx)))
+            .on_action(cx.listener(|this, _: &FindPrevious, w, cx| this.find_step(false, w, cx)))
+            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom_by(Some(true), cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom_by(Some(false), cx)))
+            .on_action(cx.listener(|this, _: &ActualSize, _, cx| this.zoom_by(None, cx)))
+            .on_action(cx.listener(|this, _: &Print, _, _| this.print()))
             .on_action(cx.listener(|this, _: &Suspend, w, cx| this.suspend(w, cx)))
             .on_action(cx.listener(|this, _: &ToggleAgent, w, cx| this.toggle_agent(w, cx)))
             .on_action(cx.listener(|this, _: &Quit, w, cx| {
@@ -984,6 +995,40 @@ impl Browser {
                     .on_click(cx.listener(|this, _, w, cx| this.reload(w, cx))),
             )
             .child(self.address(Glass { over_dark }, window, cx))
+            .when(live && !zoom::is_actual_size(tab.zoom), |strip| {
+                strip.child(
+                    div()
+                        .id("zoom-level")
+                        .role(Role::Button)
+                        .aria_label("Reset zoom to actual size")
+                        .h(px(28.))
+                        .px_2()
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .rounded(px(R_BUTTON))
+                        .cursor_pointer()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .opacity(0.72)
+                        .hover(move |s| s.bg(rgba(wash)).opacity(1.))
+                        .active(|s| s.opacity(0.55))
+                        .tooltip(|window, cx| {
+                            Tooltip::new("Actual size")
+                                .action(&ActualSize, None)
+                                .build(window, cx)
+                        })
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(|this, _, _, cx| this.zoom_by(None, cx)))
+                        .child(format!("{}%", (tab.zoom * 100.).round()))
+                        .with_animation(
+                            "zoom-level-enter",
+                            Animation::new(NORMAL).with_easing(ease_out_quint()),
+                            |badge, delta| badge.opacity(0.72 * delta),
+                        ),
+                )
+            })
+            .children(self.find_bar(Glass { over_dark }, wash, window, cx))
             .when(addressed, |strip| {
                 strip.child(
                     strip_button(
@@ -1039,6 +1084,98 @@ impl Browser {
                 )
             })
             .on_mouse_down(MouseButton::Left, move_window)
+    }
+
+    /// Find in page: the same lifted glass pill the address becomes while
+    /// editing, beside it on the strip. It eases open and closed in width,
+    /// the address giving way, with its contents laid out at full width so
+    /// they never reflow mid-motion. Enter and ⇧Enter step through matches.
+    fn find_bar(
+        &self,
+        glass: Glass,
+        wash: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let open = self.finding == Some(self.tabs[self.active].id) && !self.lab;
+        let reveal = motion::transition(
+            "find-open",
+            if open { 1. } else { 0. },
+            Transition::new(NORMAL),
+            window,
+            cx,
+        );
+        if reveal < 0.01 {
+            return None;
+        }
+        let query = self.find.read(cx).value();
+        let label = (!query.is_empty())
+            .then(|| self.find_matches.map(find_label))
+            .flatten();
+        let control = |id: &'static str, title: &str, icon: IconName| {
+            strip_control(id, title, icon, wash, 22.).rounded_full()
+        };
+        Some(
+            div()
+                .id("find")
+                .flex_shrink_0()
+                .w(px(FIND_BAR * reveal))
+                .h(px(30.))
+                .mx_1()
+                .overflow_hidden()
+                .rounded_full()
+                .bg(glass.fill(reveal))
+                .border_1()
+                .border_color(glass.edge(reveal))
+                .shadow(glass.shadow(reveal))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .w(px(FIND_BAR - 2.))
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .pr(px(3.))
+                        .opacity(reveal)
+                        .child(
+                            div().flex_1().min_w_0().h_full().child(
+                                Input::new(&self.find)
+                                    .appearance(false)
+                                    .aria_label("Find on page")
+                                    .h_full()
+                                    .py_0()
+                                    .px_3()
+                                    .text_size(px(13.))
+                                    .prefix(Icon::new(IconName::Search).size_3p5().opacity(0.6)),
+                            ),
+                        )
+                        .children(label.map(|label| {
+                            div()
+                                .flex_shrink_0()
+                                .pr_1()
+                                .text_size(px(11.))
+                                .opacity(0.6)
+                                .whitespace_nowrap()
+                                .child(label)
+                        }))
+                        .child(
+                            control("find-previous", "Previous match", IconName::ChevronUp)
+                                .on_click(
+                                    cx.listener(|this, _, w, cx| this.find_step(false, w, cx)),
+                                ),
+                        )
+                        .child(
+                            control("find-next", "Next match", IconName::ChevronDown).on_click(
+                                cx.listener(|this, _, w, cx| this.find_step(true, w, cx)),
+                            ),
+                        )
+                        .child(
+                            control("find-close", "Done", IconName::X)
+                                .on_click(cx.listener(|this, _, w, cx| this.close_find(w, cx))),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The address, filling the strip between the buttons. At rest it is
@@ -1236,12 +1373,24 @@ fn move_window(event: &MouseDownEvent, window: &mut Window, _: &mut App) {
 /// A control on the page-tinted strip: inherits the strip's ink, uses a
 /// translucent wash on hover, and never starts a window drag.
 fn strip_button(id: &'static str, title: &str, icon: IconName, wash: u32) -> Stateful<Div> {
+    strip_control(id, title, icon, wash, 28.)
+}
+
+/// `strip_button` at another size; smaller ones nest inside pills.
+fn strip_control(
+    id: &'static str,
+    title: &str,
+    icon: IconName,
+    wash: u32,
+    size: f32,
+) -> Stateful<Div> {
     let tip: SharedString = title.to_string().into();
+    let icon = Icon::new(icon);
     div()
         .id(id)
         .role(Role::Button)
         .aria_label(title.to_string())
-        .size(px(28.))
+        .size(px(size))
         .flex_shrink_0()
         .flex()
         .items_center()
@@ -1253,7 +1402,27 @@ fn strip_button(id: &'static str, title: &str, icon: IconName, wash: u32) -> Sta
         .active(|s| s.opacity(0.55))
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(Icon::new(icon).size_4())
+        .child(if size < 28. {
+            icon.size_3p5()
+        } else {
+            icon.size_4()
+        })
+}
+
+/// "3 of 12", "No matches", or a floor when WebKit stopped counting.
+fn find_label(matches: engine::Matches) -> String {
+    match matches {
+        engine::Matches { count: Some(0), .. } => "No matches".into(),
+        engine::Matches {
+            count: Some(count),
+            index: Some(index),
+        } if index < count => format!("{} of {count}", index + 1),
+        engine::Matches { count: Some(1), .. } => "1 match".into(),
+        engine::Matches {
+            count: Some(count), ..
+        } => format!("{count} matches"),
+        engine::Matches { count: None, .. } => format!("{}+ matches", engine::MAX_MATCHES),
+    }
 }
 
 /// A color that eases in RGB. GPUI's `Hsla` interpolates hue, so white to
@@ -1388,6 +1557,16 @@ mod tests {
     use gpui::base::motion::Interpolate;
 
     // `crate::*` brings in GPUI's own `test` macro; use the standard one.
+    #[core::prelude::v1::test]
+    fn find_counts_read_naturally() {
+        let label = |count, index| find_label(engine::Matches { count, index });
+        assert_eq!(label(Some(12), Some(2)), "3 of 12");
+        assert_eq!(label(Some(0), None), "No matches");
+        assert_eq!(label(Some(4), None), "4 matches");
+        assert_eq!(label(Some(1), None), "1 match");
+        assert_eq!(label(None, None), "1000+ matches");
+    }
+
     #[core::prelude::v1::test]
     fn strip_colors_blend_in_rgb_not_through_other_hues() {
         // White to navy used to pass through teal (hue interpolation).
