@@ -604,13 +604,16 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
                 NSAutoresizingMaskOptions::ViewWidthSizable
                     | NSAutoresizingMaskOptions::ViewHeightSizable,
             );
-            // Clip the page and any docked Inspector to the shell's rounded
-            // card, just inside its 1 px border.
+            // Clip the page and any docked Inspector to the shell's panel:
+            // only its two sidebar-facing (left) corners are rounded, just
+            // inside the 1 px edge; the window's own corners clip the rest.
             host.setWantsLayer(true);
             let layer: *mut objc2::runtime::AnyObject = objc2::msg_send![&host, layer];
             if let Some(layer) = layer.as_ref() {
+                const LEFT_CORNERS: usize = 1 | 4; // kCALayerMinXMinYCorner | kCALayerMinXMaxYCorner
                 let radius = f64::from(crate::ui::CARD_RADIUS - 1.);
                 let _: () = objc2::msg_send![layer, setCornerRadius: radius];
+                let _: () = objc2::msg_send![layer, setMaskedCorners: LEFT_CORNERS];
                 let _: () = objc2::msg_send![layer, setMasksToBounds: true];
             }
             container.addSubview(&host);

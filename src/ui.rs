@@ -56,9 +56,10 @@ pub(crate) fn palette(dark: bool) -> Palette {
 
 const SIDEBAR: f32 = 248.;
 /// Matches the native page host's corner radius in engine.rs.
+/// The page panel runs flush to the window's top, right and bottom edges; only
+/// its sidebar-facing corners are rounded, so it reads as lying above the
+/// sidebar rather than framed inside the window.
 pub(crate) const CARD_RADIUS: f32 = 12.;
-/// Space around the page panel; leaves room for its shadow to read.
-const CARD_GUTTER: f32 = 10.;
 /// Height of the media controls a playing tab's sidebar cell grows by.
 const MEDIA_STRIP: f32 = 30.;
 const FAST: Duration = Duration::from_millis(140);
@@ -953,66 +954,53 @@ impl Render for Browser {
             }))
             .child(self.sidebar(window, cx))
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .py(px(CARD_GUTTER))
-                    .pr(px(CARD_GUTTER))
-                    .child(
-                        div()
-                            .size_full()
-                            .flex()
-                            .flex_col()
-                            .overflow_hidden()
-                            .rounded(px(CARD_RADIUS))
-                            .bg(rgb(p.card))
-                            .border_1()
-                            .border_color(panel_edge(self.dark))
-                            .shadow(panel_shadow(self.dark))
-                            .child(body)
-                            .when_some(self.notice.clone(), |d, message| {
-                                d.child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .min_h(px(36.))
-                                        .px_3()
-                                        .py_1()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .border_t_1()
-                                        .border_color(rgb(p.line))
-                                        .bg(rgb(p.field))
-                                        .text_size(px(12.))
-                                        .child(
-                                            Icon::new(IconName::Info)
-                                                .size_3p5()
-                                                .text_color(rgb(p.muted)),
-                                        )
-                                        .child(div().flex_1().min_w_0().child(message))
-                                        .child(
-                                            icon_button(
-                                                "dismiss-notice",
-                                                "Dismiss",
-                                                IconName::X,
-                                                p,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| {
-                                                    this.notice = None;
-                                                    cx.notify();
-                                                }),
-                                            ),
-                                        )
-                                        .with_animation(
-                                            "notice-enter",
-                                            Animation::new(NORMAL).with_easing(ease_out_quint()),
-                                            |bar, delta| bar.opacity(delta),
-                                        ),
-                                )
-                            }),
-                    ),
+                div().flex_1().min_w_0().h_full().child(
+                    div()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .overflow_hidden()
+                        .rounded_l(px(CARD_RADIUS))
+                        .bg(rgb(p.card))
+                        .border_l_1()
+                        .border_color(panel_edge(self.dark))
+                        .shadow(panel_shadow(self.dark))
+                        .child(body)
+                        .when_some(self.notice.clone(), |d, message| {
+                            d.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .min_h(px(36.))
+                                    .px_3()
+                                    .py_1()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .border_t_1()
+                                    .border_color(rgb(p.line))
+                                    .bg(rgb(p.field))
+                                    .text_size(px(12.))
+                                    .child(
+                                        Icon::new(IconName::Info)
+                                            .size_3p5()
+                                            .text_color(rgb(p.muted)),
+                                    )
+                                    .child(div().flex_1().min_w_0().child(message))
+                                    .child(
+                                        icon_button("dismiss-notice", "Dismiss", IconName::X, p)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.notice = None;
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .with_animation(
+                                        "notice-enter",
+                                        Animation::new(NORMAL).with_easing(ease_out_quint()),
+                                        |bar, delta| bar.opacity(delta),
+                                    ),
+                            )
+                        }),
+                ),
             )
     }
 }
