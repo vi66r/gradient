@@ -63,7 +63,14 @@ pub(crate) const CARD_RADIUS: f32 = 16.;
 /// The draggable strip across the top of the page panel: a calm "control
 /// zone" in the titlebar band, tinted with the page's own color. It is where
 /// a full-page app's chrome will live once pages can go UI-less.
-const CONTROL_ZONE: f32 = 38.;
+/// Matches the sidebar's top row so its contents share the traffic lights'
+/// centerline.
+const CONTROL_ZONE: f32 = 44.;
+/// Radius scale. Controls (address field, tab cells, rows) share one radius,
+/// standalone buttons a step smaller, and anything nested inside a control
+/// uses the control's radius minus its inset, so curves stay concentric.
+const R_CONTROL: f32 = 10.;
+const R_BUTTON: f32 = 8.;
 /// Height of the media controls a playing tab's sidebar cell grows by.
 const MEDIA_STRIP: f32 = 30.;
 const FAST: Duration = Duration::from_millis(140);
@@ -127,7 +134,7 @@ impl Browser {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .rounded(px(8.))
+                            .rounded(px(R_CONTROL))
                             .cursor_pointer()
                             .text_size(px(13.))
                             .text_color(rgb(p.muted))
@@ -264,7 +271,9 @@ impl Browser {
         );
         let strip = media.filter(|_| media_height > 0.5).map(|media| {
             let control = |id: &'static str, title: &str, icon: IconName| {
-                icon_button(id, title, icon, p).size(px(24.))
+                icon_button(id, title, icon, p)
+                    .size(px(24.))
+                    .rounded(px(R_CONTROL - 4.))
             };
             div()
                 .h(px(media_height))
@@ -367,7 +376,7 @@ impl Browser {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(6.))
+                    .rounded(px(R_CONTROL - 4.))
                     .text_color(rgb(p.muted))
                     .when(!selected, |d| {
                         d.opacity(0.).group_hover(group.clone(), |s| s.opacity(1.))
@@ -388,7 +397,7 @@ impl Browser {
             .flex_shrink_0()
             .flex()
             .flex_col()
-            .rounded(px(8.))
+            .rounded(px(R_CONTROL))
             .cursor_pointer()
             .bg(background)
             .when(selected, |d| d.shadow_xs())
@@ -423,7 +432,7 @@ impl Browser {
             .overflow_hidden()
             .flex()
             .items_center()
-            .rounded(px(9.))
+            .rounded(px(R_CONTROL))
             .bg(rgb(if editing { p.card } else { p.field }))
             .border_1()
             .border_color(rgb(if editing { p.accent } else { p.line }));
@@ -496,6 +505,7 @@ impl Browser {
                             p,
                         )
                         .size(px(26.))
+                        .rounded(px(R_CONTROL - 5.))
                         .when(copied, |d| d.text_color(rgb(p.accent)))
                         .on_click(cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
@@ -1055,6 +1065,9 @@ impl Browser {
         div()
             .id("control-zone")
             .h(px(CONTROL_ZONE))
+            // GPUI clips children to rectangles, not the panel's rounded
+            // shape, so the strip rounds its own corner to match.
+            .rounded_tl(px(CARD_RADIUS))
             .flex_shrink_0()
             .px(px(72.))
             .flex()
@@ -1128,7 +1141,7 @@ fn icon_button(id: &'static str, title: &str, icon: IconName, p: Palette) -> Sta
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(7.))
+        .rounded(px(R_BUTTON))
         .cursor_pointer()
         .text_color(rgb(p.muted))
         .hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
