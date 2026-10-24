@@ -131,42 +131,61 @@ impl Browser {
                     )
                     .children((0..self.tabs.len()).map(|index| self.tab_row(index, p, window, cx))),
             )
+            // Tools: Request Lab as a labeled row (discoverable, shows when
+            // it's open), and agent sharing as a state toggle beside it.
             .child(
                 div()
-                    .h(px(44.))
                     .flex_shrink_0()
-                    .px_2()
+                    .mx_2()
+                    .mb_2()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(rgba(if self.dark { 0xffffff14 } else { 0x0f172a14 }))
                     .flex()
                     .items_center()
-                    .gap_0p5()
+                    .gap_1()
                     .child(
-                        icon_button("request-lab", "Request lab", IconName::Terminal, p)
-                            .when(self.lab, |d| d.bg(rgb(p.selected)).text_color(rgb(p.ink)))
+                        div()
+                            .id("request-lab")
+                            .role(Role::Button)
+                            .aria_label("Request lab")
+                            .aria_selected(self.lab)
+                            .flex_1()
+                            .h(px(32.))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .rounded(px(R_CONTROL))
+                            .cursor_pointer()
+                            .text_size(px(13.))
+                            .text_color(rgb(if self.lab { p.ink } else { p.muted }))
+                            .when(self.lab, |d| d.bg(rgb(p.selected)).shadow_xs())
+                            .when(!self.lab, |d| {
+                                d.hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
+                            })
+                            .child(Icon::new(IconName::Terminal).size_4())
+                            .child("Request Lab")
                             .on_click(cx.listener(|this, _, w, cx| this.show_lab(w, cx))),
                     )
                     .child(
                         icon_button(
                             "agent-access",
                             if grant {
-                                "Revoke agent access"
+                                "Agents can see this tab. Click to revoke."
                             } else {
-                                "Share tab with agent"
+                                "Share this tab with agents"
                             },
                             IconName::Bot,
                             p,
                         )
-                        .when(grant, |d| d.text_color(rgb(p.accent)))
+                        .size(px(32.))
+                        .rounded(px(R_CONTROL))
+                        .when(grant, |d| {
+                            d.bg(rgba((p.accent << 8) | 0x24)).text_color(rgb(p.accent))
+                        })
                         .on_click(cx.listener(|this, _, w, cx| this.toggle_agent(w, cx))),
-                    )
-                    .when(grant, |d| {
-                        d.child(
-                            div()
-                                .ml_1()
-                                .text_size(px(11.))
-                                .text_color(rgb(p.accent))
-                                .child("Agent can see this tab"),
-                        )
-                    }),
+                    ),
             )
             .into_any_element()
     }
@@ -760,7 +779,7 @@ impl Render for Browser {
             .track_focus(&self.focus)
             .size_full()
             .flex()
-            .bg(rgb(p.chrome))
+            .bg(frosted(p.chrome, self.dark))
             .text_color(rgb(p.ink))
             .font_family(if cfg!(target_os = "macos") {
                 ".AppleSystemUIFont"
@@ -1136,6 +1155,13 @@ fn readable_on(background: u32) -> u32 {
     };
     let luminance = 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
     if luminance > 0.4 { 0x1d232c } else { 0xf2f3f5 }
+}
+
+/// A light veil of our palette over the system sidebar material, so the frost
+/// keeps the shell's tone while the desktop still shows through.
+fn frosted(chrome: u32, dark: bool) -> Hsla {
+    let alpha = if dark { 0x59 } else { 0x40 };
+    rgba((chrome << 8) | alpha).into()
 }
 
 /// A translucent hairline, so the edge reads as light rather than a stroke.

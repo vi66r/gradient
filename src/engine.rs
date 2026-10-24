@@ -581,11 +581,92 @@ fn native_host_needs_update(page: &Page, bounds: Bounds<Pixels>) -> bool {
     host.0.isHidden() || host.0.frame() != native_frame(&container, bounds)
 }
 
+/// The window's plain AppKit content container, created on first use: the
+/// system sidebar material at the bottom (the frosted chrome), GPUI's view
+/// above it, and native page hosts above that.
+#[cfg(target_os = "macos")]
+fn content_container(
+    window: &objc2_app_kit::NSWindow,
+    mtm: objc2::MainThreadMarker,
+) -> anyhow::Result<objc2::rc::Retained<objc2_app_kit::NSView>> {
+    use objc2::{ClassType, MainThreadOnly};
+    use objc2_app_kit::{
+        NSAutoresizingMaskOptions, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+        NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode,
+    };
+    let content = window
+        .contentView()
+        .ok_or_else(|| anyhow::anyhow!("Missing content view"))?;
+    if content.class() == NSView::class() {
+        return Ok(content);
+    }
+    let fill =
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable;
+    let container = NSView::initWithFrame(NSView::alloc(mtm), content.frame());
+    window.setContentView(Some(&container));
+    content.setFrame(container.bounds());
+    content.setAutoresizingMask(fill);
+    container.addSubview(&content);
+    // Finder/Mail's sidebar material: the desktop shows through, frosted,
+    // adapting to light and dark. GPUI draws transparently over it.
+    let backdrop =
+        NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), container.bounds());
+    backdrop.setMaterial(NSVisualEffectMaterial::Sidebar);
+    backdrop.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    backdrop.setState(NSVisualEffectState::Active);
+    backdrop.setAutoresizingMask(fill);
+    container.addSubview_positioned_relativeTo(&backdrop, NSWindowOrderingMode::Below, None);
+    Ok(container)
+}
+
+/// Installs the frosted backdrop as soon as the window exists, before any
+/// page is attached.
+#[cfg(target_os = "macos")]
+pub fn install_backdrop(window: &Window) {
+    if let Some(native) = native_window(window) {
+        let mtm = objc2::MainThreadMarker::new().expect("Windows are created on the UI thread");
+        if let Err(error) = content_container(&native, mtm) {
+            log::error!("Window backdrop: {error}");
+        }
+    }
+}
+
+/// Pins the native window's appearance (frost, WebKit's color scheme) for
+/// visual checks, or follows the system with `None`.
+#[cfg(target_os = "macos")]
+pub fn pin_appearance(window: &Window, dark: Option<bool>) {
+    use objc2_app_kit::{
+        NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
+    };
+    if let Some(native) = native_window(window) {
+        let appearance = dark.and_then(|dark| unsafe {
+            NSAppearance::appearanceNamed(if dark {
+                NSAppearanceNameDarkAqua
+            } else {
+                NSAppearanceNameAqua
+            })
+        });
+        native.setAppearance(appearance.as_deref());
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn native_window(window: &Window) -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
+    use wry::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let RawWindowHandle::AppKit(handle) = HasWindowHandle::window_handle(window).ok()?.as_raw()
+    else {
+        return None;
+    };
+    // The handle's view belongs to this window and outlives this call.
+    let view = unsafe { handle.ns_view.cast::<objc2_app_kit::NSView>().as_ref() };
+    view.window()
+}
+
 /// GPUI's accessibility provider owns its view's children. Put WKWebView beside
 /// that view in an ordinary AppKit container so VoiceOver sees both native trees.
 #[cfg(target_os = "macos")]
 fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
-    use objc2::{ClassType, MainThreadMarker, MainThreadOnly};
+    use objc2::{MainThreadMarker, MainThreadOnly};
     use objc2_app_kit::{NSAutoresizingMaskOptions, NSView};
     use wry::WebViewExtMacOS;
     let mtm = MainThreadMarker::new().expect("WebKit is created on the UI thread");
@@ -597,22 +678,7 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
         let window = parent
             .window()
             .ok_or_else(|| anyhow::anyhow!("Missing native window"))?;
-        let content = window
-            .contentView()
-            .ok_or_else(|| anyhow::anyhow!("Missing content view"))?;
-        let container = if content.class() != NSView::class() {
-            let container = NSView::initWithFrame(NSView::alloc(mtm), content.frame());
-            window.setContentView(Some(&container));
-            content.setFrame(container.bounds());
-            content.setAutoresizingMask(
-                NSAutoresizingMaskOptions::ViewWidthSizable
-                    | NSAutoresizingMaskOptions::ViewHeightSizable,
-            );
-            container.addSubview(&content);
-            container
-        } else {
-            content
-        };
+        let container = content_container(&window, mtm)?;
         if page.host.borrow().is_none() {
             let host = NSView::initWithFrame(NSView::alloc(mtm), web.frame());
             // AppKit resizes the host in the same native resize transaction as

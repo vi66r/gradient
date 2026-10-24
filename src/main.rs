@@ -277,6 +277,8 @@ impl Browser {
                 }),
             ],
         };
+        #[cfg(target_os = "macos")]
+        engine::install_backdrop(window);
         this.follow_appearance(window, cx);
         // Restored tabs show cached icons before (or without) loading.
         for tab in this.tabs.iter().filter(|tab| !tab.private) {
@@ -337,16 +339,23 @@ impl Browser {
     }
 
     fn follow_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // BROWSER_APPEARANCE=light|dark pins the shell theme for visual
-        // checks without touching the system setting.
-        self.dark = match std::env::var("BROWSER_APPEARANCE").as_deref() {
-            Ok("light") => false,
-            Ok("dark") => true,
-            _ => matches!(
+        // BROWSER_APPEARANCE=light|dark pins the window's appearance for
+        // visual checks without touching the system setting.
+        let pinned = match std::env::var("BROWSER_APPEARANCE").as_deref() {
+            Ok("light") => Some(false),
+            Ok("dark") => Some(true),
+            _ => None,
+        };
+        #[cfg(target_os = "macos")]
+        if pinned.is_some() {
+            engine::pin_appearance(window, pinned);
+        }
+        self.dark = pinned.unwrap_or_else(|| {
+            matches!(
                 window.appearance(),
                 WindowAppearance::Dark | WindowAppearance::VibrantDark
-            ),
-        };
+            )
+        });
         let mode = if self.dark {
             ThemeMode::Dark
         } else {
@@ -1592,6 +1601,9 @@ fn main() -> anyhow::Result<()> {
                 // sidebar's top row move the window themselves, so controls
                 // inside the titlebar band never start a native drag.
                 app_owns_titlebar_drag: true,
+                // GPUI draws transparently over the system sidebar material
+                // (engine::install_backdrop); the page panel stays opaque.
+                window_background: WindowBackgroundAppearance::Transparent,
                 ..Default::default()
             },
             cx,
