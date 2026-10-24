@@ -31,6 +31,7 @@ pub struct Ivars {
     id: u64,
     tab: u64,
     events: Sender<Event>,
+    foreground: gpui::ForegroundExecutor,
 }
 
 define_class!(
@@ -57,45 +58,75 @@ define_class!(
             );
             let dir = crate::downloads::dir();
             let name = crate::downloads::file_name(&suggested.to_string());
-            // Two downloads of one name may both be in flight before either
-            // file exists; reserve chosen paths until they finish.
-            let path = ACTIVE.with_borrow(|active| {
-                crate::downloads::unique(&dir, &name, |path| {
-                    crate::downloads::exists(path)
-                        || active
-                            .values()
-                            .any(|entry| entry.path.as_deref() == Some(path))
+            // ~/Downloads is privacy-protected: the first touch makes macOS
+            // ask for access and blocks until the user answers. Ask from a
+            // thread of its own so the window stays responsive meanwhile;
+            // WebKit's own use of the folder afterwards doesn't wait again.
+            let (sender, receiver) = async_channel::bounded(1);
+            let folder = dir.clone();
+            std::thread::spawn(move || {
+                let access = std::fs::create_dir_all(&folder)
+                    .and_then(|()| std::fs::read_dir(&folder).map(drop));
+                let _ = sender.send_blocking(access);
+            });
+            let handler = handler.copy();
+            self.ivars()
+                .foreground
+                .spawn(async move {
+                    let access = receiver.recv().await.unwrap_or_else(|_| {
+                        Err(std::io::Error::other("the folder check stopped"))
+                    });
+                    // Cancelled while macOS was asking.
+                    if !ACTIVE.with_borrow(|active| active.contains_key(&id)) {
+                        handler.call((std::ptr::null_mut(),));
+                        return;
+                    }
+                    if let Err(error) = access {
+                        log::warn!("Downloads folder: {error}");
+                        let _entry = take(id);
+                        handler.call((std::ptr::null_mut(),));
+                        let _ = events.try_send(Event::Notice(
+                            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                                "The download couldn’t start: Browser can’t use your Downloads folder. Allow it in System Settings ▸ Privacy & Security ▸ Files & Folders."
+                            } else {
+                                "The download couldn’t start: the Downloads folder isn’t available."
+                            }
+                            .into(),
+                        ));
+                        return;
+                    }
+                    // Two downloads of one name may both be in flight before
+                    // either file exists; reserve chosen paths until they finish.
+                    let path = ACTIVE.with_borrow(|active| {
+                        crate::downloads::unique(&dir, &name, |path| {
+                            crate::downloads::exists(path)
+                                || active
+                                    .values()
+                                    .any(|entry| entry.path.as_deref() == Some(path))
+                        })
+                    });
+                    ACTIVE.with_borrow_mut(|active| {
+                        if let Some(entry) = active.get_mut(&id) {
+                            entry.path = Some(path.clone());
+                        }
+                    });
+                    let url = NSURL::fileURLWithPath_isDirectory(
+                        &NSString::from_str(&path.to_string_lossy()),
+                        false,
+                    );
+                    handler.call((Retained::as_ptr(&url).cast_mut(),));
+                    let name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or(name);
+                    let _ = events.try_send(Event::DownloadStarted {
+                        id,
+                        tab,
+                        name,
+                        path,
+                    });
                 })
-            });
-            if let Err(error) = std::fs::create_dir_all(&dir) {
-                log::warn!("Downloads folder: {error}");
-                let _entry = take(id);
-                handler.call((std::ptr::null_mut(),));
-                let _ = events.try_send(Event::Notice(
-                    "The download couldn’t start: the Downloads folder isn’t available.".into(),
-                ));
-                return;
-            }
-            ACTIVE.with_borrow_mut(|active| {
-                if let Some(entry) = active.get_mut(&id) {
-                    entry.path = Some(path.clone());
-                }
-            });
-            let url = NSURL::fileURLWithPath_isDirectory(
-                &NSString::from_str(&path.to_string_lossy()),
-                false,
-            );
-            handler.call((Retained::as_ptr(&url).cast_mut(),));
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or(name);
-            let _ = events.try_send(Event::DownloadStarted {
-                id,
-                tab,
-                name,
-                path,
-            });
+                .detach();
         }
 
         #[unsafe(method(downloadDidFinish:))]
@@ -127,10 +158,20 @@ fn take(id: u64) -> Option<Entry> {
 }
 
 /// Takes over a download WebKit just started for tab `tab`.
-pub fn adopt(download: &WKDownload, tab: u64, events: Sender<Event>) {
+pub fn adopt(
+    download: &WKDownload,
+    tab: u64,
+    events: Sender<Event>,
+    foreground: gpui::ForegroundExecutor,
+) {
     let mtm = MainThreadMarker::new().expect("WebKit downloads start on the UI thread");
     let id = NEXT.replace(NEXT.get() + 1);
-    let object = Delegate::alloc(mtm).set_ivars(Ivars { id, tab, events });
+    let object = Delegate::alloc(mtm).set_ivars(Ivars {
+        id,
+        tab,
+        events,
+        foreground,
+    });
     let delegate: Retained<Delegate> = unsafe { msg_send![super(object), init] };
     unsafe { download.setDelegate(Some(ProtocolObject::from_ref(&*delegate))) };
     ACTIVE.with_borrow_mut(|active| {

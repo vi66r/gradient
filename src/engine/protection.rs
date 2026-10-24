@@ -428,7 +428,12 @@ impl Protection {
     /// tab, whose main-frame load may have ended without a document.
     fn became_download(&self, view: &WKWebView, main: bool, download: &WKDownload) {
         let state = self.ivars();
-        super::download::adopt(download, state.id, state.events.clone());
+        super::download::adopt(
+            download,
+            state.id,
+            state.events.clone(),
+            state.foreground.clone(),
+        );
         if main {
             let empty = unsafe { view.backForwardList().currentItem() }.is_none();
             let _ = state.events.try_send(Event::PageBecameDownload {
