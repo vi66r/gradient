@@ -60,6 +60,8 @@ struct Tab {
     media: Option<TabMedia>,
     /// The page's own color (`0xRRGGBB`); tints the control zone above it.
     tint: Option<u32>,
+    /// Latest pending color report; see `settle_tint`.
+    tint_epoch: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -214,6 +216,7 @@ impl Browser {
                 revision: 0,
                 media: None,
                 tint: None,
+                tint_epoch: 0,
                 page: None,
                 error: None,
                 grant: None,
@@ -231,6 +234,7 @@ impl Browser {
                 revision: 0,
                 media: None,
                 tint: None,
+                tint_epoch: 0,
                 page: None,
                 error: None,
                 grant: None,
@@ -362,11 +366,11 @@ impl Browser {
             ThemeMode::Light
         };
         Theme::change(mode, Some(window), cx);
-        // Pages may publish a different theme-color for light and dark.
+        // Pages re-report their colors themselves (theme observer); only the
+        // fallback panel color depends on the shell's theme.
         for tab in &self.tabs {
             if let Some(page) = &tab.page {
                 page.set_edge_color(ui::strip_color(tab.tint, self.dark));
-                page.request_theme(tab.id, self.events.clone());
             }
         }
         cx.notify();
@@ -473,6 +477,7 @@ impl Browser {
                 revision: 0,
                 media: None,
                 tint: None,
+                tint_epoch: 0,
                 page: None,
                 error: None,
                 grant: None,
@@ -962,6 +967,35 @@ impl Browser {
         cx.notify();
     }
 
+    /// WebKit reports its default white for a moment after each commit, before
+    /// the page's own background arrives; apply only colors that hold briefly
+    /// so the strip doesn't flash on dark sites.
+    fn settle_tint(&mut self, id: u64, tint: Option<u32>, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) else {
+            return;
+        };
+        tab.tint_epoch = tab.tint_epoch.wrapping_add(1);
+        let epoch = tab.tint_epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(60))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                let dark = this.dark;
+                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == id)
+                    && tab.tint_epoch == epoch
+                {
+                    tab.tint = tint;
+                    if let Some(page) = &tab.page {
+                        page.set_edge_color(ui::strip_color(tint, dark));
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     /// The live address when the page has one, else the saved address.
     fn tab_url(&self, index: usize) -> String {
         let tab = &self.tabs[index];
@@ -1084,35 +1118,16 @@ impl Browser {
                 }
             }
             engine::Event::MediaChanged(id) => self.media_changed(id, cx),
-            engine::Event::PageTint(id, tint) => {
-                let dark = self.dark;
-                if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
-                    tab.tint = tint;
-                    if let Some(page) = &tab.page {
-                        page.set_edge_color(ui::strip_color(tint, dark));
-                    }
-                }
-            }
+            engine::Event::PageTint(id, tint) => self.settle_tint(id, tint, cx),
             engine::Event::Committed(id) => {
-                if let Some(page) = self
-                    .tabs
-                    .iter()
-                    .find(|tab| tab.id == id)
-                    .and_then(|tab| tab.page.clone())
+                if !cx.reduce_motion()
+                    && let Some(page) = self
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.id == id)
+                        .and_then(|tab| tab.page.as_ref())
                 {
-                    if !cx.reduce_motion() {
-                        page.fade_in();
-                    }
-                    // Read the new site's color early so the strip's change
-                    // runs with the fade; it's read again when loading ends.
-                    let events = self.events.clone();
-                    cx.spawn(async move |_, cx| {
-                        cx.background_executor()
-                            .timer(Duration::from_millis(120))
-                            .await;
-                        page.request_theme(id, events);
-                    })
-                    .detach();
+                    page.fade_in();
                 }
             }
             engine::Event::MediaSession { id, session } => {
@@ -1147,9 +1162,6 @@ impl Browser {
                     }
                     if !loading {
                         self.request_icon(index);
-                        if let Some(page) = &self.tabs[index].page {
-                            page.request_theme(id, self.events.clone());
-                        }
                     }
                     if index == self.active
                         && !self.address.read(cx).focus_handle(cx).is_focused(window)

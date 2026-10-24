@@ -117,6 +117,9 @@ pub struct Page {
     file_gate: FileGate,
     #[cfg(target_os = "macos")]
     media: media::Media,
+    /// Observes the page's color for the control strip (`Event::PageTint`).
+    #[cfg(target_os = "macos")]
+    _theme: theme::Theme,
     visible: Cell<bool>,
     bounds: Cell<Bounds<Pixels>>,
     #[cfg(target_os = "macos")]
@@ -309,7 +312,16 @@ impl Page {
             media::Media::install(
                 objc2::rc::Retained::into_super(raw.webview()),
                 id,
-                media_events,
+                media_events.clone(),
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let theme = {
+            use wry::WebViewExtMacOS;
+            theme::Theme::install(
+                objc2::rc::Retained::into_super(raw.webview()),
+                id,
+                media_events.clone(),
             )
         };
         #[cfg(not(target_os = "macos"))]
@@ -322,6 +334,8 @@ impl Page {
             file_gate,
             #[cfg(target_os = "macos")]
             media,
+            #[cfg(target_os = "macos")]
+            _theme: theme,
             visible: Cell::new(false),
             bounds: Cell::new(Bounds::default()),
             #[cfg(target_os = "macos")]
@@ -387,21 +401,6 @@ impl Page {
             use wry::WebViewExtMacOS;
             fade::fade_in(&self.raw.webview());
         }
-    }
-
-    /// Reads the page's color; the answer arrives as `Event::PageTint`.
-    pub fn request_theme(&self, id: u64, events: Sender<Event>) {
-        #[cfg(target_os = "macos")]
-        {
-            use wry::WebViewExtMacOS;
-            theme::request(
-                &objc2::rc::Retained::into_super(self.raw.webview()),
-                id,
-                events,
-            );
-        }
-        #[cfg(not(target_os = "macos"))]
-        let _ = (id, events);
     }
 
     pub fn skip_track(&self, forward: bool) {
