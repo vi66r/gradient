@@ -131,6 +131,7 @@ impl Browser {
                     )
                     .children((0..self.tabs.len()).map(|index| self.tab_row(index, p, window, cx))),
             )
+            // The footer: downloads, when there are any, then the tools.
             // Tools: Request Lab as a labeled row (discoverable, shows when
             // it's open), and agent sharing as a state toggle beside it.
             .child(
@@ -142,52 +143,237 @@ impl Browser {
                     .border_t_1()
                     .border_color(rgba(if self.dark { 0xffffff14 } else { 0x0f172a14 }))
                     .flex()
-                    .items_center()
+                    .flex_col()
                     .gap_1()
-                    .child(
-                        div()
-                            .id("request-lab")
-                            .role(Role::Button)
-                            .aria_label("Request lab")
-                            .aria_selected(self.lab)
-                            .flex_1()
-                            .h(px(32.))
-                            .px_2()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .rounded(px(R_CONTROL))
-                            .cursor_pointer()
-                            .text_size(px(13.))
-                            .text_color(rgb(if self.lab { p.ink } else { p.muted }))
-                            .when(self.lab, |d| d.bg(rgb(p.selected)).shadow_xs())
-                            .when(!self.lab, |d| {
-                                d.hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
-                            })
-                            .child(Icon::new(IconName::Terminal).size_4())
-                            .child("Request Lab")
-                            .on_click(cx.listener(|this, _, w, cx| this.show_lab(w, cx))),
+                    .children(
+                        self.downloads
+                            .iter()
+                            .map(|download| self.download_row(download, p, window, cx)),
                     )
                     .child(
-                        icon_button(
-                            "agent-access",
-                            if grant {
-                                "Agents can see this tab. Click to revoke."
-                            } else {
-                                "Share this tab with agents"
-                            },
-                            IconName::Bot,
-                            p,
-                        )
-                        .size(px(32.))
-                        .rounded(px(R_CONTROL))
-                        .when(grant, |d| {
-                            d.bg(rgba((p.accent << 8) | 0x24)).text_color(rgb(p.accent))
-                        })
-                        .on_click(cx.listener(|this, _, w, cx| this.toggle_agent(w, cx))),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .id("request-lab")
+                                    .role(Role::Button)
+                                    .aria_label("Request lab")
+                                    .aria_selected(self.lab)
+                                    .flex_1()
+                                    .h(px(32.))
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .rounded(px(R_CONTROL))
+                                    .cursor_pointer()
+                                    .text_size(px(13.))
+                                    .text_color(rgb(if self.lab { p.ink } else { p.muted }))
+                                    .when(self.lab, |d| d.bg(rgb(p.selected)).shadow_xs())
+                                    .when(!self.lab, |d| {
+                                        d.hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
+                                    })
+                                    .child(Icon::new(IconName::Terminal).size_4())
+                                    .child("Request Lab")
+                                    .on_click(cx.listener(|this, _, w, cx| this.show_lab(w, cx))),
+                            )
+                            .child(
+                                icon_button(
+                                    "agent-access",
+                                    if grant {
+                                        "Agents can see this tab. Click to revoke."
+                                    } else {
+                                        "Share this tab with agents"
+                                    },
+                                    IconName::Bot,
+                                    p,
+                                )
+                                .size(px(32.))
+                                .rounded(px(R_CONTROL))
+                                .when(grant, |d| {
+                                    d.bg(rgba((p.accent << 8) | 0x24)).text_color(rgb(p.accent))
+                                })
+                                .on_click(cx.listener(|this, _, w, cx| this.toggle_agent(w, cx))),
+                            ),
                     ),
             )
             .into_any_element()
+    }
+
+    /// A download, shaped like the Request Lab row beneath it: the file's name
+    /// with a quiet note (percent, size, or "Failed"), and a hairline of
+    /// progress along the bottom while it runs. Hovering swaps the note for
+    /// Cancel, or Show in Finder and Remove once it's done; clicking a
+    /// finished row also shows it in Finder.
+    fn download_row(
+        &self,
+        download: &downloads::Download,
+        p: Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let id = download.id;
+        let group: SharedString = format!("download-{id}").into();
+        let done = download.state == downloads::State::Done;
+        let failed = download.state == downloads::State::Failed;
+        let fraction = download.fraction().map(|fraction| {
+            motion::transition(
+                format!("download-progress-{id}"),
+                fraction,
+                Transition::new(NORMAL),
+                window,
+                cx,
+            )
+        });
+        let name: SharedString = download.name.clone().into();
+        // The tab cell's close button, with a tooltip.
+        let action = |id: &'static str, title: &str, icon: IconName| {
+            let tip: SharedString = title.to_string().into();
+            div()
+                .id(id)
+                .role(Role::Button)
+                .aria_label(title.to_string())
+                .size(px(22.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(R_CONTROL - 4.))
+                .cursor_pointer()
+                .text_color(rgb(p.muted))
+                .hover(|s| s.bg(rgb(p.selected)).text_color(rgb(p.ink)))
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .child(Icon::new(icon).size_3())
+        };
+        let actions = div()
+            .absolute()
+            .right(px(5.))
+            .top_0()
+            .bottom_0()
+            .flex()
+            .items_center()
+            .gap_0p5()
+            .opacity(0.)
+            .group_hover(group.clone(), |s| s.opacity(1.))
+            .when(done, |actions| {
+                actions.child(
+                    action("download-reveal", "Show in Finder", IconName::Search).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.reveal_download(id);
+                            cx.notify();
+                        }),
+                    ),
+                )
+            })
+            .child(if download.active() {
+                action("download-cancel", "Cancel download", IconName::X).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.cancel_download(id);
+                        cx.notify();
+                    },
+                ))
+            } else {
+                action("download-remove", "Remove from list", IconName::X).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.dismiss_download(id);
+                        cx.notify();
+                    },
+                ))
+            });
+        let bar = download.active().then(|| {
+            let track = div()
+                .absolute()
+                .left(px(10.))
+                .right(px(10.))
+                .bottom(px(3.))
+                .h(px(2.))
+                .rounded_full()
+                .overflow_hidden()
+                .bg(rgba((p.muted << 8) | 0x2e));
+            match fraction {
+                Some(fraction) => track.child(
+                    div()
+                        .h_full()
+                        .w(relative(fraction))
+                        .rounded_full()
+                        .bg(rgb(p.accent)),
+                ),
+                // No length from the server: the address field's sliding bar.
+                None => track.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .h_full()
+                        .w(relative(0.3))
+                        .rounded_full()
+                        .bg(rgb(p.accent))
+                        .with_animation(
+                            ("download-indeterminate", id),
+                            Animation::new(Duration::from_millis(1100))
+                                .repeat()
+                                .with_easing(ease_in_out),
+                            |bar, delta| bar.left(relative(delta * 1.3 - 0.3)),
+                        ),
+                ),
+            }
+        });
+        div()
+            .id(("download", id))
+            .group(group.clone())
+            .role(Role::Button)
+            .aria_label(format!(
+                "{name}, {}",
+                if done {
+                    "downloaded".to_string()
+                } else if failed {
+                    "failed".into()
+                } else {
+                    download.status()
+                }
+            ))
+            .relative()
+            .h(px(32.))
+            .flex_shrink_0()
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded(px(R_CONTROL))
+            .text_size(px(13.))
+            .text_color(rgb(p.muted))
+            .hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
+            .when(done, |row| {
+                row.cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.reveal_download(id);
+                        cx.notify();
+                    }))
+            })
+            .child(
+                Icon::new(if done {
+                    IconName::File
+                } else if failed {
+                    IconName::CircleAlert
+                } else {
+                    IconName::Download
+                })
+                .size_4()
+                .flex_shrink_0(),
+            )
+            .child(div().flex_1().min_w_0().truncate().child(name))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(11.))
+                    .group_hover(group, |s| s.opacity(0.))
+                    .child(download.status()),
+            )
+            .child(actions)
+            .children(bar)
     }
 
     fn tab_row(

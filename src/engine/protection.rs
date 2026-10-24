@@ -6,10 +6,12 @@ use objc2::{
     rc::Retained,
     runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject, Sel},
 };
-use objc2_foundation::{NSError, NSString};
+use objc2_foundation::{NSError, NSHTTPURLResponse, NSString};
 use objc2_web_kit::{
-    WKContentWorld, WKFrameInfo, WKNavigation, WKNavigationAction, WKNavigationActionPolicy,
-    WKNavigationDelegate, WKNavigationType, WKUserScript, WKUserScriptInjectionTime, WKWebView,
+    WKContentWorld, WKDownload, WKFrameInfo, WKNavigation, WKNavigationAction,
+    WKNavigationActionPolicy, WKNavigationDelegate, WKNavigationResponse,
+    WKNavigationResponsePolicy, WKNavigationType, WKUserScript, WKUserScriptInjectionTime,
+    WKWebView,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -298,6 +300,33 @@ define_class!(
             }).detach();
         }
 
+        /// Wry downloads only types WebKit can't show. A response the server
+        /// marks as an attachment downloads too, as in Safari.
+        #[unsafe(method(webView:decidePolicyForNavigationResponse:decisionHandler:))]
+        unsafe fn decide_response(&self, view: &WKWebView, response: &WKNavigationResponse, handler: &Block<dyn Fn(WKNavigationResponsePolicy)>) {
+            let response_object = unsafe { response.response() };
+            let disposition = response_object
+                .downcast_ref::<NSHTTPURLResponse>()
+                .and_then(|http| http.valueForHTTPHeaderField(&NSString::from_str("Content-Disposition")))
+                .map(|value| value.to_string());
+            if disposition.as_deref().is_some_and(crate::downloads::is_attachment) {
+                handler.call((WKNavigationResponsePolicy::Download,));
+                return;
+            }
+            unsafe { self.ivars().original.webView_decidePolicyForNavigationResponse_decisionHandler(view, response, handler); }
+        }
+
+        #[unsafe(method(webView:navigationAction:didBecomeDownload:))]
+        unsafe fn action_download(&self, view: &WKWebView, action: &WKNavigationAction, download: &WKDownload) {
+            let main = unsafe { action.targetFrame() }.is_some_and(|frame| unsafe { frame.isMainFrame() });
+            self.became_download(view, main, download);
+        }
+
+        #[unsafe(method(webView:navigationResponse:didBecomeDownload:))]
+        unsafe fn response_download(&self, view: &WKWebView, response: &WKNavigationResponse, download: &WKDownload) {
+            self.became_download(view, unsafe { response.isForMainFrame() }, download);
+        }
+
         #[unsafe(method(webView:didCommitNavigation:))]
         unsafe fn committed(&self, view: &WKWebView, navigation: Option<&WKNavigation>) {
             let _ = self.ivars().events.try_send(Event::Committed(self.ivars().id));
@@ -393,6 +422,20 @@ impl Protection {
                 }
             })
             .detach();
+    }
+
+    /// Adopts the download (instead of Wry) and tells the shell about the
+    /// tab, whose main-frame load may have ended without a document.
+    fn became_download(&self, view: &WKWebView, main: bool, download: &WKDownload) {
+        let state = self.ivars();
+        super::download::adopt(download, state.id, state.events.clone());
+        if main {
+            let empty = unsafe { view.backForwardList().currentItem() }.is_none();
+            let _ = state.events.try_send(Event::PageBecameDownload {
+                id: state.id,
+                empty,
+            });
+        }
     }
 
     pub fn navigation_pending(&self) -> bool {

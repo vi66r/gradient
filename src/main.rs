@@ -1,6 +1,7 @@
 extern crate gpui_kit as gpui;
 mod agent;
 mod assets;
+mod downloads;
 mod engine;
 mod favicon;
 mod http_client;
@@ -141,6 +142,13 @@ struct Browser {
     /// Hosts with a fetch in flight or no usable icon this session.
     icon_requests: HashSet<String>,
     icon_cache: favicon::DiskCache,
+    /// Newest first; memory only. See `downloads.rs`.
+    downloads: Vec<downloads::Download>,
+    /// A progress refresh loop is running.
+    downloads_polling: bool,
+    /// Tabs a page opened, and the tab that opened each, so a popup that only
+    /// started a download can close and hand the download back.
+    popups: HashMap<u64, u64>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -280,6 +288,9 @@ impl Browser {
             icons: HashMap::new(),
             icon_requests: HashSet::new(),
             icon_cache,
+            downloads: Vec::new(),
+            downloads_polling: false,
+            popups: HashMap::new(),
             _subscriptions: vec![
                 address_events,
                 cx.observe_window_appearance(window, |this, window, cx| {
@@ -715,6 +726,7 @@ impl Browser {
         for tab in closing.into_iter().rev().filter(|tab| !tab.private) {
             self.remember_closed(tab.saved);
         }
+        self.prune_downloads();
         match self.tabs.iter().position(|tab| tab.id == active) {
             Some(index) => self.activate(index, window, cx),
             None if self.tabs.is_empty() => self.new_tab(START.into(), false, window, cx),
@@ -729,6 +741,7 @@ impl Browser {
             self.remember_closed(tab.saved.clone());
         }
         drop(tab);
+        self.prune_downloads();
         if self.tabs.is_empty() {
             self.new_tab(START.into(), false, window, cx);
         } else {
@@ -1221,7 +1234,11 @@ impl Browser {
             }
             engine::Event::NewTab(id, url) => {
                 if let Some(tab) = self.tabs.iter().find(|tab| tab.id == id) {
+                    let popup = self.next_id;
                     self.new_tab(url, tab.private, window, cx);
+                    if self.next_id > popup {
+                        self.popups.insert(popup, id);
+                    }
                 }
             }
             engine::Event::OpenFiles(id, urls) => {
@@ -1230,6 +1247,16 @@ impl Browser {
                 }
             }
             engine::Event::Notice(message) => self.notice = Some(message),
+            engine::Event::DownloadStarted {
+                id,
+                tab,
+                name,
+                path,
+            } => self.download_started(id, tab, name, path, cx),
+            engine::Event::DownloadEnded { id, ok } => self.download_ended(id, ok),
+            engine::Event::PageBecameDownload { id, empty } => {
+                self.page_became_download(id, empty, window, cx)
+            }
             engine::Event::Icon(key, bytes) => {
                 match bytes.and_then(|bytes| Some((favicon::sniff(&bytes)?, bytes))) {
                     Some((format, bytes)) => {
@@ -1422,13 +1449,22 @@ impl Browser {
                     && (this.requesting || !this.request_url.read(cx).value().is_empty()
                         || !this.request_headers.read(cx).value().is_empty()
                         || !this.request_body.read(cx).value().is_empty());
-                if states.iter().all(|(_, state)| state.clear()) && !lab_draft {
+                let edits = !states.iter().all(|(_, state)| state.clear()) || lab_draft;
+                let downloading = if action == lifecycle::Discard::Quit { this.downloads.iter().filter(|download| download.active()).count() } else { 0 };
+                if !edits && downloading == 0 {
                     this.discard_pending = false;
                     this.discard(action.clone(), window, cx);
                     return None;
                 }
                 let (title, confirm, detail) = action.labels();
-                Some(window.prompt(PromptLevel::Warning, title, Some(detail), &["Cancel", confirm], cx))
+                let detail = match (edits, downloading) {
+                    (true, 0) => detail.to_string(),
+                    (edits, count) => {
+                        let downloads = if count == 1 { "A download is still in progress. Quitting cancels it.".to_string() } else { format!("{count} downloads are still in progress. Quitting cancels them.") };
+                        if edits { format!("{detail}\n\n{downloads}") } else { downloads }
+                    }
+                };
+                Some(window.prompt(PromptLevel::Warning, title, Some(&detail), &["Cancel", confirm], cx))
             }).ok().flatten();
             let Some(answer) = answer else { return; };
             let confirmed = answer.await == Ok(1);
@@ -1515,6 +1551,8 @@ impl Browser {
     }
 
     fn finish_quit(&self, cx: &App) {
+        // Partial files would otherwise stay in Downloads.
+        engine::cancel_downloads();
         #[cfg(target_os = "macos")]
         if let Some(guard) = &self.termination {
             guard.allow();

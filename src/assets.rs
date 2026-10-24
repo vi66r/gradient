@@ -25,7 +25,8 @@ gpui::assets::icon_assets!(
         Volume2,
         VolumeX,
         SkipBack,
-        SkipForward
+        SkipForward,
+        Download
     ]
 );
 
