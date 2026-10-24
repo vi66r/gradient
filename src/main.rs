@@ -58,6 +58,8 @@ struct Tab {
     /// Present while the tab plays (or was paused from the sidebar); drives
     /// the expanded sidebar cell.
     media: Option<TabMedia>,
+    /// The page's own color (`0xRRGGBB`); tints the control zone above it.
+    tint: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -211,6 +213,7 @@ impl Browser {
                 loading: false,
                 revision: 0,
                 media: None,
+                tint: None,
                 page: None,
                 error: None,
                 grant: None,
@@ -227,6 +230,7 @@ impl Browser {
                 loading: false,
                 revision: 0,
                 media: None,
+                tint: None,
                 page: None,
                 error: None,
                 grant: None,
@@ -349,6 +353,12 @@ impl Browser {
             ThemeMode::Light
         };
         Theme::change(mode, Some(window), cx);
+        // Pages may publish a different theme-color for light and dark.
+        for tab in &self.tabs {
+            if let Some(page) = &tab.page {
+                page.request_theme(tab.id, self.events.clone());
+            }
+        }
         cx.notify();
     }
 
@@ -451,6 +461,7 @@ impl Browser {
                 loading: false,
                 revision: 0,
                 media: None,
+                tint: None,
                 page: None,
                 error: None,
                 grant: None,
@@ -1062,6 +1073,11 @@ impl Browser {
                 }
             }
             engine::Event::MediaChanged(id) => self.media_changed(id, cx),
+            engine::Event::PageTint(id, tint) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
+                    tab.tint = tint;
+                }
+            }
             engine::Event::MediaSession { id, session } => {
                 if let Some(media) = self
                     .tabs
@@ -1094,6 +1110,9 @@ impl Browser {
                     }
                     if !loading {
                         self.request_icon(index);
+                        if let Some(page) = &self.tabs[index].page {
+                            page.request_theme(id, self.events.clone());
+                        }
                     }
                     if index == self.active
                         && !self.address.read(cx).focus_handle(cx).is_focused(window)

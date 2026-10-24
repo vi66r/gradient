@@ -9,6 +9,8 @@ pub enum Event {
     QuitRequested,
     /// A page started or stopped playing audio or a media session.
     MediaChanged(u64),
+    /// The page's own color (`0xRRGGBB`), for the control zone above it.
+    PageTint(u64, Option<u32>),
     /// Whether a page publishes Media Session metadata (track controls).
     MediaSession {
         id: u64,
@@ -354,6 +356,21 @@ impl Page {
         self.media.pause();
     }
 
+    /// Reads the page's color; the answer arrives as `Event::PageTint`.
+    pub fn request_theme(&self, id: u64, events: Sender<Event>) {
+        #[cfg(target_os = "macos")]
+        {
+            use wry::WebViewExtMacOS;
+            theme::request(
+                &objc2::rc::Retained::into_super(self.raw.webview()),
+                id,
+                events,
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (id, events);
+    }
+
     pub fn skip_track(&self, forward: bool) {
         #[cfg(target_os = "macos")]
         self.media.skip(forward);
@@ -604,16 +621,18 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
                 NSAutoresizingMaskOptions::ViewWidthSizable
                     | NSAutoresizingMaskOptions::ViewHeightSizable,
             );
-            // Clip the page and any docked Inspector to the shell's panel:
-            // only its two sidebar-facing (left) corners are rounded, just
-            // inside the 1 px edge; the window's own corners clip the rest.
+            // Clip the page and any docked Inspector to the shell's panel,
+            // just inside its 1 px edge; the window's corners clip the rest.
             host.setWantsLayer(true);
             let layer: *mut objc2::runtime::AnyObject = objc2::msg_send![&host, layer];
             if let Some(layer) = layer.as_ref() {
-                const LEFT_CORNERS: usize = 1 | 4; // kCALayerMinXMinYCorner | kCALayerMinXMaxYCorner
+                // The control zone covers the panel's top-left corner, so the
+                // page rounds only its bottom-left (MinY is the bottom in an
+                // unflipped layer).
+                const BOTTOM_LEFT: usize = 1; // kCALayerMinXMinYCorner
                 let radius = f64::from(crate::ui::CARD_RADIUS - 1.);
                 let _: () = objc2::msg_send![layer, setCornerRadius: radius];
-                let _: () = objc2::msg_send![layer, setMaskedCorners: LEFT_CORNERS];
+                let _: () = objc2::msg_send![layer, setMaskedCorners: BOTTOM_LEFT];
                 let _: () = objc2::msg_send![layer, setMasksToBounds: true];
             }
             container.addSubview(&host);
@@ -706,6 +725,8 @@ mod app_link;
 
 #[cfg(target_os = "macos")]
 mod media;
+#[cfg(target_os = "macos")]
+mod theme;
 #[cfg(target_os = "macos")]
 pub use media::MediaState;
 /// Media playback is only observable through WebKit on macOS.

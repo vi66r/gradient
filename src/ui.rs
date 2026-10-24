@@ -59,7 +59,11 @@ const SIDEBAR: f32 = 248.;
 /// The page panel runs flush to the window's top, right and bottom edges; only
 /// its sidebar-facing corners are rounded, so it reads as lying above the
 /// sidebar rather than framed inside the window.
-pub(crate) const CARD_RADIUS: f32 = 12.;
+pub(crate) const CARD_RADIUS: f32 = 16.;
+/// The draggable strip across the top of the page panel: a calm "control
+/// zone" in the titlebar band, tinted with the page's own color. It is where
+/// a full-page app's chrome will live once pages can go UI-less.
+const CONTROL_ZONE: f32 = 38.;
 /// Height of the media controls a playing tab's sidebar cell grows by.
 const MEDIA_STRIP: f32 = 30.;
 const FAST: Duration = Duration::from_millis(140);
@@ -965,6 +969,7 @@ impl Render for Browser {
                         .border_l_1()
                         .border_color(panel_edge(self.dark))
                         .shadow(panel_shadow(self.dark))
+                        .child(self.control_zone(p, cx))
                         .child(body)
                         .when_some(self.notice.clone(), |d, message| {
                             d.child(
@@ -1016,19 +1021,77 @@ fn panel_shadow(dark: bool) -> Vec<BoxShadow> {
         spread_radius: px(spread),
         inset: false,
     };
+    // Small and faint: wide, low-alpha blurs band on 8-bit surfaces.
     if dark {
         vec![
-            layer(0x00000080, 1., 3., 0.),
-            layer(0x0000008c, 10., 28., 0.),
-            layer(0x00000073, 28., 56., -10.),
+            layer(0x00000052, 0., 2., 0.),
+            layer(0x00000047, 0., 10., 0.),
         ]
     } else {
         vec![
-            layer(0x0f172a0f, 1., 2., 0.),
-            layer(0x0f172a1a, 8., 24., 0.),
-            layer(0x0f172a1f, 24., 48., -12.),
+            layer(0x0f172a14, 0., 2., 0.),
+            layer(0x0f172a0f, 0., 10., 0.),
         ]
     }
+}
+
+impl Browser {
+    fn control_zone(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let tab = &self.tabs[self.active];
+        let tint = tab.tint.filter(|_| !self.lab && tab.page.is_some());
+        let background = tint.unwrap_or(p.card);
+        let title: SharedString = if self.lab {
+            "Request lab".into()
+        } else if tab.saved.title.is_empty() {
+            model::display_host(&tab.saved.url).into()
+        } else {
+            tab.saved.title.clone().into()
+        };
+        let ink = if tint.is_some() {
+            readable_on(background)
+        } else {
+            p.muted
+        };
+        div()
+            .id("control-zone")
+            .h(px(CONTROL_ZONE))
+            .flex_shrink_0()
+            .px(px(72.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgb(background))
+            .text_size(px(12.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(ink))
+            .child(div().min_w_0().truncate().opacity(0.7).child(title))
+            // The whole strip moves the window; a double-click zooms it,
+            // like any titlebar.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, event: &MouseDownEvent, window, _| {
+                    if event.click_count == 2 {
+                        window.titlebar_double_click();
+                    } else {
+                        window.start_window_move();
+                    }
+                }),
+            )
+    }
+}
+
+/// Dark or light text, whichever reads on `background` (`0xRRGGBB`).
+fn readable_on(background: u32) -> u32 {
+    let channel = |shift: u32| {
+        let value = ((background >> shift) & 0xff) as f32 / 255.;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
+    if luminance > 0.4 { 0x1d232c } else { 0xf2f3f5 }
 }
 
 /// A translucent hairline, so the edge reads as light rather than a stroke.
