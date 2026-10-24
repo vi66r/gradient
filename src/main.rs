@@ -333,10 +333,16 @@ impl Browser {
     }
 
     fn follow_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.dark = matches!(
-            window.appearance(),
-            WindowAppearance::Dark | WindowAppearance::VibrantDark
-        );
+        // BROWSER_APPEARANCE=light|dark pins the shell theme for visual
+        // checks without touching the system setting.
+        self.dark = match std::env::var("BROWSER_APPEARANCE").as_deref() {
+            Ok("light") => false,
+            Ok("dark") => true,
+            _ => matches!(
+                window.appearance(),
+                WindowAppearance::Dark | WindowAppearance::VibrantDark
+            ),
+        };
         let mode = if self.dark {
             ThemeMode::Dark
         } else {

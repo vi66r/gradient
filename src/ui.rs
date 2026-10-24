@@ -37,7 +37,8 @@ const LIGHT: Palette = Palette {
 };
 
 const DARK: Palette = Palette {
-    chrome: 0x16171a,
+    // Lifted off black so the page panel's shadow has something to darken.
+    chrome: 0x1b1c20,
     card: 0x212328,
     field: 0x25272c,
     line: 0x2e3137,
@@ -55,7 +56,9 @@ pub(crate) fn palette(dark: bool) -> Palette {
 
 const SIDEBAR: f32 = 248.;
 /// Matches the native page host's corner radius in engine.rs.
-pub(crate) const CARD_RADIUS: f32 = 10.;
+pub(crate) const CARD_RADIUS: f32 = 12.;
+/// Space around the page panel; leaves room for its shadow to read.
+const CARD_GUTTER: f32 = 10.;
 /// Height of the media controls a playing tab's sidebar cell grows by.
 const MEDIA_STRIP: f32 = 30.;
 const FAST: Duration = Duration::from_millis(140);
@@ -950,55 +953,99 @@ impl Render for Browser {
             }))
             .child(self.sidebar(window, cx))
             .child(
-                div().flex_1().min_w_0().h_full().py_2().pr_2().child(
-                    div()
-                        .size_full()
-                        .flex()
-                        .flex_col()
-                        .overflow_hidden()
-                        .rounded(px(CARD_RADIUS))
-                        .bg(rgb(p.card))
-                        .border_1()
-                        .border_color(rgb(p.line))
-                        .shadow_sm()
-                        .child(body)
-                        .when_some(self.notice.clone(), |d, message| {
-                            d.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .min_h(px(36.))
-                                    .px_3()
-                                    .py_1()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .border_t_1()
-                                    .border_color(rgb(p.line))
-                                    .bg(rgb(p.field))
-                                    .text_size(px(12.))
-                                    .child(
-                                        Icon::new(IconName::Info)
-                                            .size_3p5()
-                                            .text_color(rgb(p.muted)),
-                                    )
-                                    .child(div().flex_1().min_w_0().child(message))
-                                    .child(
-                                        icon_button("dismiss-notice", "Dismiss", IconName::X, p)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.notice = None;
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .with_animation(
-                                        "notice-enter",
-                                        Animation::new(NORMAL).with_easing(ease_out_quint()),
-                                        |bar, delta| bar.opacity(delta),
-                                    ),
-                            )
-                        }),
-                ),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .py(px(CARD_GUTTER))
+                    .pr(px(CARD_GUTTER))
+                    .child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .overflow_hidden()
+                            .rounded(px(CARD_RADIUS))
+                            .bg(rgb(p.card))
+                            .border_1()
+                            .border_color(panel_edge(self.dark))
+                            .shadow(panel_shadow(self.dark))
+                            .child(body)
+                            .when_some(self.notice.clone(), |d, message| {
+                                d.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .min_h(px(36.))
+                                        .px_3()
+                                        .py_1()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .border_t_1()
+                                        .border_color(rgb(p.line))
+                                        .bg(rgb(p.field))
+                                        .text_size(px(12.))
+                                        .child(
+                                            Icon::new(IconName::Info)
+                                                .size_3p5()
+                                                .text_color(rgb(p.muted)),
+                                        )
+                                        .child(div().flex_1().min_w_0().child(message))
+                                        .child(
+                                            icon_button(
+                                                "dismiss-notice",
+                                                "Dismiss",
+                                                IconName::X,
+                                                p,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.notice = None;
+                                                    cx.notify();
+                                                }),
+                                            ),
+                                        )
+                                        .with_animation(
+                                            "notice-enter",
+                                            Animation::new(NORMAL).with_easing(ease_out_quint()),
+                                            |bar, delta| bar.opacity(delta),
+                                        ),
+                                )
+                            }),
+                    ),
             )
     }
+}
+
+/// The page sits on a raised panel above the chrome: a tight contact shadow,
+/// a soft mid shadow and a wide ambient one, like a macOS window. Dark mode
+/// needs much denser shadows to read against near-black chrome.
+fn panel_shadow(dark: bool) -> Vec<BoxShadow> {
+    let layer = |color: u32, y: f32, blur: f32, spread: f32| BoxShadow {
+        color: rgba(color).into(),
+        offset: point(px(0.), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset: false,
+    };
+    if dark {
+        vec![
+            layer(0x00000080, 1., 3., 0.),
+            layer(0x0000008c, 10., 28., 0.),
+            layer(0x00000073, 28., 56., -10.),
+        ]
+    } else {
+        vec![
+            layer(0x0f172a0f, 1., 2., 0.),
+            layer(0x0f172a1a, 8., 24., 0.),
+            layer(0x0f172a1f, 24., 48., -12.),
+        ]
+    }
+}
+
+/// A translucent hairline, so the edge reads as light rather than a stroke.
+fn panel_edge(dark: bool) -> Hsla {
+    rgba(if dark { 0xffffff12 } else { 0x0f172a12 }).into()
 }
 
 /// Host and port (or a local file's name) for the resting address field; the
