@@ -267,9 +267,9 @@ impl Page {
             });
         #[cfg(target_os = "macos")]
         let builder = {
-            use wry::WebViewBuilderExtDarwin;
+            use wry::WebViewBuilderExtMacos;
             builder
-                .with_data_store_identifier(profile)
+                .with_webview_configuration(page_configuration(private, profile))
                 // Pages keep their own drop zones. WebKit's fallback of
                 // loading a dropped file becomes new tabs (see `Protection`),
                 // which needs the paths the user actually dropped.
@@ -611,6 +611,66 @@ fn native_host_needs_update(page: &Page, bounds: Bounds<Pixels>) -> bool {
         return true;
     }
     host.0.isHidden() || host.0.frame() != native_frame(&container, bounds)
+}
+
+/// The page's WebKit configuration. Wry skips its own data-store setup when
+/// given one, so this applies the same rules: an ephemeral store for private
+/// tabs, the profile's persistent store otherwise. On top of that:
+/// - Safari's user-agent suffix, so sites stop treating Browser as an unknown
+///   (Gmail warned it was "no longer supported") and Browser blends in with
+///   every Safari user instead of standing out;
+/// - WebKit's page-top color sampling (SPI, Safari's own settings), which
+///   reports the color actually visible at the top of the page for the
+///   control strip. Gmail paints dark inside a white document.
+#[cfg(target_os = "macos")]
+fn page_configuration(
+    private: bool,
+    profile: [u8; 16],
+) -> objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration> {
+    use objc2_foundation::{NSString, NSUUID};
+    use objc2_web_kit::{WKWebViewConfiguration, WKWebsiteDataStore};
+    let mtm = objc2::MainThreadMarker::new().expect("Pages are created on the UI thread");
+    let config = unsafe { WKWebViewConfiguration::new(mtm) };
+    let store = if private {
+        unsafe { WKWebsiteDataStore::nonPersistentDataStore(mtm) }
+    } else {
+        unsafe { WKWebsiteDataStore::dataStoreForIdentifier(&NSUUID::from_bytes(profile), mtm) }
+    };
+    unsafe {
+        config.setWebsiteDataStore(&store);
+        config.setApplicationNameForUserAgent(Some(&NSString::from_str(&format!(
+            "Version/{} Safari/605.1.15",
+            safari_version()
+        ))));
+        let responds =
+            |selector| -> bool { objc2::msg_send![&config, respondsToSelector: selector] };
+        if responds(objc2::sel!(_setSampledPageTopColorMaxDifference:))
+            && responds(objc2::sel!(_setSampledPageTopColorMinHeight:))
+        {
+            let _: () = objc2::msg_send![&config, _setSampledPageTopColorMaxDifference: 5.0f64];
+            let _: () = objc2::msg_send![&config, _setSampledPageTopColorMinHeight: 10.0f64];
+        }
+    }
+    config
+}
+
+/// The installed Safari's version, as Safari reports it in its user agent.
+#[cfg(target_os = "macos")]
+fn safari_version() -> &'static str {
+    use objc2_foundation::{NSBundle, NSString};
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        NSBundle::bundleWithPath(&NSString::from_str("/Applications/Safari.app"))
+            .and_then(|bundle| {
+                bundle.objectForInfoDictionaryKey(&NSString::from_str("CFBundleShortVersionString"))
+            })
+            .and_then(|value| value.downcast::<NSString>().ok())
+            .map(|value| value.to_string())
+            .filter(|value| {
+                !value.is_empty() && value.chars().all(|c| c.is_ascii_digit() || c == '.')
+            })
+            .unwrap_or_else(|| "26.0".into())
+    })
 }
 
 /// The window's plain AppKit content container, created on first use: the
