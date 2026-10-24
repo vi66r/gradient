@@ -13,6 +13,12 @@ pub enum Event {
     Committed(u64),
     /// The page's own color (`0xRRGGBB`), for the control zone above it.
     PageTint(u64, Option<u32>),
+    /// Find-in-page matches for `query` in a page.
+    FindMatches {
+        id: u64,
+        query: String,
+        matches: Matches,
+    },
     /// Whether a page publishes Media Session metadata (track controls).
     MediaSession {
         id: u64,
@@ -143,6 +149,27 @@ pub fn reveal(path: &std::path::Path) {
     #[cfg(not(target_os = "macos"))]
     let _ = path;
 }
+/// How many times a find query matches, and which match is selected.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Matches {
+    /// `None` when there are more than WebKit was asked to count.
+    pub count: Option<usize>,
+    /// Zero-based; `None` when unknown or nothing matched.
+    pub index: Option<usize>,
+}
+
+/// Which match find in page selects next.
+#[cfg(target_os = "macos")]
+pub use find::{FindStep, MAX_MATCHES};
+#[cfg(not(target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FindStep {
+    Typed,
+    Next,
+    Previous,
+}
+#[cfg(not(target_os = "macos"))]
+pub const MAX_MATCHES: usize = 1000;
 
 pub struct PageOptions<'a> {
     pub id: u64,
@@ -176,6 +203,8 @@ pub struct Page {
     /// Observes the page's color for the control strip (`Event::PageTint`).
     #[cfg(target_os = "macos")]
     _theme: theme::Theme,
+    #[cfg(target_os = "macos")]
+    find: find::Find,
     visible: Cell<bool>,
     bounds: Cell<Bounds<Pixels>>,
     #[cfg(target_os = "macos")]
@@ -383,6 +412,15 @@ impl Page {
                 media_events.clone(),
             )
         };
+        #[cfg(target_os = "macos")]
+        let find = {
+            use wry::WebViewExtMacOS;
+            find::Find::install(
+                objc2::rc::Retained::into_super(raw.webview()),
+                id,
+                media_events.clone(),
+            )
+        };
         #[cfg(not(target_os = "macos"))]
         let _ = (protection_events, media_events);
         let page = Rc::new(Self {
@@ -395,6 +433,8 @@ impl Page {
             media,
             #[cfg(target_os = "macos")]
             _theme: theme,
+            #[cfg(target_os = "macos")]
+            find,
             visible: Cell::new(false),
             bounds: Cell::new(Bounds::default()),
             #[cfg(target_os = "macos")]
@@ -471,6 +511,82 @@ impl Page {
         {
             use wry::WebViewExtMacOS;
             fade::fade_in(&self.raw.webview());
+        }
+    }
+
+    /// Selects a match for `query`; counts arrive as `Event::FindMatches`.
+    /// Find needs WebKit SPI and is macOS-only for now.
+    pub fn find(&self, query: &str, step: FindStep) {
+        #[cfg(target_os = "macos")]
+        {
+            self.find.find(query, step);
+            // WebKit dims the page under its find overlay. The dissolve into
+            // the strip would lay a light band over the dimmed top; the strip
+            // meets the overlay at a clean edge instead, as in Safari.
+            if let Some(edge) = self.edge.borrow().as_ref() {
+                edge.setHidden(true);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (query, step);
+    }
+
+    /// Clears find's overlay and highlights.
+    pub fn end_find(&self) {
+        #[cfg(target_os = "macos")]
+        {
+            self.find.end();
+            if let Some(edge) = self.edge.borrow().as_ref() {
+                edge.setHidden(false);
+            }
+        }
+    }
+
+    /// Scales the page's content (CSS zoom), not just its rendering.
+    pub fn set_zoom(&self, zoom: f64) {
+        let _ = self.raw.zoom(zoom);
+    }
+
+    /// Opens the system print panel as a sheet; its PDF menu saves a PDF.
+    /// `title` names the job, and so the suggested PDF file name.
+    pub fn print(&self, title: &str) {
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_app_kit::{NSPrintInfo, NSPrintingPaginationMode};
+            use objc2_foundation::{NSCopying, NSString};
+            use wry::WebViewExtMacOS;
+            let view = self.raw.webview();
+            let Some(window) = view.window() else {
+                return;
+            };
+            // A copy, so fitting the page width doesn't change the app-wide
+            // defaults other print jobs start from.
+            let info = NSPrintInfo::sharedPrintInfo().copy();
+            info.setHorizontalPagination(NSPrintingPaginationMode::Fit);
+            info.setVerticallyCentered(false);
+            unsafe {
+                let operation = view.printOperationWithPrintInfo(&info);
+                operation.setJobTitle(Some(&NSString::from_str(title)));
+                operation.setShowsPrintPanel(true);
+                operation.setShowsProgressPanel(true);
+                // Two widely reported WKWebView pitfalls, both of which print
+                // blank pages: a print view left without a frame, and a
+                // synchronous `runOperation`. Size it and run it as a sheet.
+                if let Some(printing) = operation.view() {
+                    printing.setFrame(view.bounds());
+                }
+                operation.runOperationModalForWindow_delegate_didRunSelector_contextInfo(
+                    &window,
+                    None,
+                    None,
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = title;
+            let _ = self.raw.print();
         }
     }
 
@@ -692,7 +808,11 @@ fn native_host_needs_update(page: &Page, bounds: Bounds<Pixels>) -> bool {
 ///   every Safari user instead of standing out;
 /// - WebKit's page-top color sampling (SPI, Safari's own settings), which
 ///   reports the color actually visible at the top of the page for the
-///   control strip. Gmail paints dark inside a white document.
+///   control strip. Gmail paints dark inside a white document;
+/// - element fullscreen (`requestFullscreen`, video players' fullscreen
+///   buttons). WebKit moves the page into a fullscreen window of its own and
+///   back into its host on exit; Wry turns this on too, but the page's
+///   configuration is Browser's to state.
 #[cfg(target_os = "macos")]
 fn page_configuration(
     private: bool,
@@ -709,6 +829,7 @@ fn page_configuration(
     };
     unsafe {
         config.setWebsiteDataStore(&store);
+        config.preferences().setElementFullscreenEnabled(true);
         config.setApplicationNameForUserAgent(Some(&NSString::from_str(&format!(
             "Version/{} Safari/605.1.15",
             safari_version()
@@ -960,6 +1081,8 @@ mod download;
 
 #[cfg(target_os = "macos")]
 mod fade;
+#[cfg(target_os = "macos")]
+mod find;
 #[cfg(target_os = "macos")]
 mod media;
 #[cfg(target_os = "macos")]

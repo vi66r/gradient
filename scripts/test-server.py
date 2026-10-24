@@ -35,7 +35,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/api/"):
             return self.api()
-        name = "gpu.html" if self.path.startswith("/gpu") else "browser.html"
+        name = ("gpu.html" if self.path.startswith("/gpu")
+                else "basics.html" if self.path.startswith("/basics") else "browser.html")
         content = (ROOT / name).read_bytes()
         if self.server.reports is not None:
             content += b'<script src="/performance.js"></script>'

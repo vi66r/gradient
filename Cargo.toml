@@ -27,7 +27,7 @@ block2 = "0.6"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
-objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "WKBackForwardList", "WKBackForwardListItem", "WKContentWorld", "WKDownload", "WKDownloadDelegate", "WKFrameInfo", "WKNavigationAction", "WKNavigationDelegate", "WKNavigationResponse", "WKUserScript", "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKSnapshotConfiguration", "objc2-app-kit"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "WKBackForwardList", "WKBackForwardListItem", "WKContentWorld", "WKDownload", "WKDownloadDelegate", "WKFrameInfo", "WKNavigationAction", "WKNavigationDelegate", "WKNavigationResponse", "WKPreferences", "WKUserScript", "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKSnapshotConfiguration", "objc2-app-kit"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

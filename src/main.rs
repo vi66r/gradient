@@ -10,6 +10,7 @@ mod mcp;
 mod model;
 mod session;
 mod ui;
+mod zoom;
 
 use gpui::component::{
     Theme, ThemeMode,
@@ -43,6 +44,13 @@ actions!(
         Inspect,
         Suspend,
         ToggleAgent,
+        Find,
+        FindNext,
+        FindPrevious,
+        ZoomIn,
+        ZoomOut,
+        ActualSize,
+        Print,
         Quit
     ]
 );
@@ -63,6 +71,8 @@ struct Tab {
     tint: Option<u32>,
     /// Latest pending color report; see `settle_tint`.
     tint_epoch: u64,
+    /// The page's zoom level, 1.0 at actual size; see `zoom::Zooms`.
+    zoom: f64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -114,6 +124,13 @@ struct Browser {
     next_id: u64,
     closed: Vec<SavedTab>,
     address: Entity<InputState>,
+    /// Find in page. The bar belongs to one tab (`finding`) and closes when
+    /// another tab takes over.
+    find: Entity<InputState>,
+    finding: Option<u64>,
+    /// The active page's matches for the current query, once WebKit reports.
+    find_matches: Option<engine::Matches>,
+    zooms: zoom::Zooms,
     focus: FocusHandle,
     events: async_channel::Sender<engine::Event>,
     store: session::Store,
@@ -163,6 +180,7 @@ impl Browser {
     ) -> Self {
         let address =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search or enter address"));
+        let find = cx.new(|cx| InputState::new(window, cx).placeholder("Find on page"));
         let request_url = cx
             .new(|cx| InputState::new(window, cx).placeholder("https://api.example.com/v1/items"));
         let request_headers = cx.new(|cx| {
@@ -203,6 +221,17 @@ impl Browser {
                 }
             }
         });
+        let find_events = cx.subscribe_in(&find, window, |this, input, event, window, cx| {
+            match event {
+                InputEvent::Change => {
+                    let query = input.read(cx).value().to_string();
+                    this.run_find(&query, engine::FindStep::Typed);
+                }
+                InputEvent::PressEnter { shift, .. } => this.find_step(!shift, window, cx),
+                InputEvent::Focus | InputEvent::Blur => {}
+            }
+            cx.notify();
+        });
         let (events, received) = async_channel::bounded(256);
         #[cfg(target_os = "macos")]
         engine::watch_native_clicks(events.clone());
@@ -230,6 +259,7 @@ impl Browser {
                 media: None,
                 tint: None,
                 tint_epoch: 0,
+                zoom: 1.,
                 page: None,
                 error: None,
                 grant: None,
@@ -248,6 +278,7 @@ impl Browser {
                 media: None,
                 tint: None,
                 tint_epoch: 0,
+                zoom: 1.,
                 page: None,
                 error: None,
                 grant: None,
@@ -256,6 +287,7 @@ impl Browser {
         let active = saved.active.min(tabs.len() - 1);
         let next_id = tabs.len() as u64 + 1;
         let icon_cache = favicon::DiskCache::new(store.dir());
+        let zooms = zoom::Zooms::load(store.dir());
         let mut this = Self {
             tabs,
             context: wry::WebContext::new(Some(session::data_dir().join("webkit"))),
@@ -264,6 +296,10 @@ impl Browser {
             next_id,
             closed: Vec::new(),
             address,
+            find,
+            finding: None,
+            find_matches: None,
+            zooms,
             focus: cx.focus_handle(),
             events,
             store,
@@ -293,6 +329,7 @@ impl Browser {
             popups: HashMap::new(),
             _subscriptions: vec![
                 address_events,
+                find_events,
                 cx.observe_window_appearance(window, |this, window, cx| {
                     this.follow_appearance(window, cx)
                 }),
@@ -428,6 +465,12 @@ impl Browser {
         ) {
             Ok(page) => {
                 page.set_edge_color(ui::strip_color(tab.tint, self.dark));
+                // Before the first paint, so a zoomed site never flashes at 100%.
+                tab.zoom = zoom::site(&tab.saved.url)
+                    .map_or(1., |site| self.zooms.get(&site, tab.private));
+                if !zoom::is_actual_size(tab.zoom) {
+                    page.set_zoom(tab.zoom);
+                }
                 tab.revision = tab.revision.wrapping_add(1);
                 tab.page = Some(page);
                 tab.loading = true;
@@ -441,6 +484,9 @@ impl Browser {
     }
 
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.finding.is_some_and(|id| id != self.tabs[index].id) {
+            self.end_find();
+        }
         for (tab_index, tab) in self.tabs.iter().enumerate() {
             if tab_index != index
                 && let Some(page) = &tab.page
@@ -495,6 +541,7 @@ impl Browser {
                 media: None,
                 tint: None,
                 tint_epoch: 0,
+                zoom: 1.,
                 page: None,
                 error: None,
                 grant: None,
@@ -1179,6 +1226,15 @@ impl Browser {
             engine::Event::MediaChanged(id) => self.media_changed(id, cx),
             engine::Event::PageTint(id, tint) => self.settle_tint(id, tint, cx),
             engine::Event::Committed(id) => {
+                self.follow_site_zoom(id);
+                // The old document's matches are gone. The bar stays open and
+                // Enter searches the new one.
+                if self.finding == Some(id) {
+                    self.find_matches = None;
+                    if let Some(page) = self.page(id) {
+                        page.end_find();
+                    }
+                }
                 if let Some(page) = self
                     .tabs
                     .iter()
@@ -1189,6 +1245,12 @@ impl Browser {
                     if !cx.reduce_motion() {
                         page.fade_in();
                     }
+                }
+            }
+            engine::Event::FindMatches { id, query, matches } => {
+                // Late reports for an older query or another tab are stale.
+                if self.finding == Some(id) && *self.find.read(cx).value() == query {
+                    self.find_matches = Some(matches);
                 }
             }
             engine::Event::MediaSession { id, session } => {
@@ -1347,6 +1409,152 @@ impl Browser {
             });
     }
 
+    /// ⌘F: shows the find bar, or selects its query if it's already open.
+    fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(page) = self.tabs[self.active].page.clone().filter(|_| !self.lab) else {
+            return;
+        };
+        let _ = page.raw.focus_parent();
+        let reopened = self.finding.is_none();
+        self.finding = Some(self.tabs[self.active].id);
+        self.find.update(cx, |input, cx| {
+            input.focus(window, cx);
+            input.select_all(window, cx);
+        });
+        // Reopening shows the last query's matches again.
+        let query = self.find.read(cx).value().to_string();
+        if reopened && !query.is_empty() {
+            page.find(&query, engine::FindStep::Typed);
+        }
+        cx.notify();
+    }
+
+    /// Esc or the bar's close button: clears the matches, back to the page.
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_find();
+        window.focus(&self.focus, cx);
+        if let Some(page) = &self.tabs[self.active].page {
+            let _ = page.raw.focus();
+        }
+        cx.notify();
+    }
+
+    /// Closes the bar without moving focus (switching tabs, Request Lab).
+    fn end_find(&mut self) {
+        let Some(id) = self.finding.take() else {
+            return;
+        };
+        self.find_matches = None;
+        if let Some(page) = self.page(id) {
+            page.end_find();
+        }
+    }
+
+    fn run_find(&mut self, query: &str, step: engine::FindStep) {
+        let Some(page) = self.finding.and_then(|id| self.page(id)).cloned() else {
+            return;
+        };
+        if query.is_empty() {
+            self.find_matches = None;
+            page.end_find();
+        } else {
+            page.find(query, step);
+        }
+    }
+
+    /// ⌘G / ⇧⌘G and Enter / ⇧Enter in the bar. With no query yet, opens it.
+    fn find_step(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.find.read(cx).value().to_string();
+        if self.finding.is_none() || query.is_empty() {
+            self.open_find(window, cx);
+            if query.is_empty() {
+                return;
+            }
+        }
+        let step = if forward {
+            engine::FindStep::Next
+        } else {
+            engine::FindStep::Previous
+        };
+        self.run_find(&query, step);
+        cx.notify();
+    }
+
+    /// ⌘+ / ⌘− (`Some(larger)`) or ⌘0 (`None`) on the active page. The level
+    /// is remembered for the site and follows to its other open tabs.
+    fn zoom_by(&mut self, change: Option<bool>, cx: &mut Context<Self>) {
+        let index = self.active;
+        let tab = &self.tabs[index];
+        let Some(page) = tab.page.clone().filter(|_| !self.lab) else {
+            return;
+        };
+        let zoom = match change {
+            Some(larger) => zoom::step(tab.zoom, larger),
+            None => 1.,
+        };
+        let private = tab.private;
+        let site = zoom::site(&self.tab_url(index));
+        let Some(site) = site else {
+            // Local files keep a level until their next document.
+            self.tabs[index].zoom = zoom;
+            page.set_zoom(zoom);
+            cx.notify();
+            return;
+        };
+        if let Err(error) = self.zooms.set(site.clone(), zoom, private) {
+            self.notice = Some(format!("Zoom level not saved: {error}"));
+        }
+        for tab in &mut self.tabs {
+            let Some(page) = &tab.page else {
+                continue;
+            };
+            if page
+                .url()
+                .ok()
+                .and_then(|url| zoom::site(&url))
+                .is_some_and(|other| other == site)
+            {
+                tab.zoom = self.zooms.get(&site, tab.private);
+                page.set_zoom(tab.zoom);
+            }
+        }
+        cx.notify();
+    }
+
+    /// A new document: take its site's level (WebKit keeps the previous
+    /// document's zoom across navigations).
+    fn follow_site_zoom(&mut self, id: u64) {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) else {
+            return;
+        };
+        let Some(page) = &tab.page else {
+            return;
+        };
+        let zoom = page
+            .url()
+            .ok()
+            .and_then(|url| zoom::site(&url))
+            .map_or(1., |site| self.zooms.get(&site, tab.private));
+        if (zoom - tab.zoom).abs() > 1e-3 {
+            tab.zoom = zoom;
+            page.set_zoom(zoom);
+        }
+    }
+
+    fn page(&self, id: u64) -> Option<&Rc<engine::Page>> {
+        self.tabs
+            .iter()
+            .find(|tab| tab.id == id)
+            .and_then(|tab| tab.page.as_ref())
+    }
+
+    fn print(&self) {
+        let tab = &self.tabs[self.active];
+        if let Some(page) = tab.page.as_ref().filter(|_| !self.lab) {
+            page.print(&tab.saved.title);
+        }
+    }
+
     fn history(&self, forward: bool) {
         if let Some(page) = &self.tabs[self.active].page {
             let _ = if forward {
@@ -1365,6 +1573,7 @@ impl Browser {
         cx.notify();
     }
     fn show_lab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_find();
         for tab in &self.tabs {
             if let Some(page) = &tab.page {
                 page.hide();
@@ -1675,6 +1884,14 @@ fn main() -> anyhow::Result<()> {
             KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
             KeyBinding::new(&format!("{modifier}-shift-j"), RequestLab, None),
             KeyBinding::new(&format!("{modifier}-alt-i"), Inspect, None),
+            KeyBinding::new(&format!("{modifier}-f"), Find, None),
+            KeyBinding::new(&format!("{modifier}-g"), FindNext, None),
+            KeyBinding::new(&format!("{modifier}-shift-g"), FindPrevious, None),
+            KeyBinding::new(&format!("{modifier}-="), ZoomIn, None),
+            KeyBinding::new(&format!("{modifier}-+"), ZoomIn, None),
+            KeyBinding::new(&format!("{modifier}--"), ZoomOut, None),
+            KeyBinding::new(&format!("{modifier}-0"), ActualSize, None),
+            KeyBinding::new(&format!("{modifier}-p"), Print, None),
             KeyBinding::new(&format!("{modifier}-q"), Quit, None),
         ]);
         cx.set_menus([
@@ -1685,6 +1902,8 @@ fn main() -> anyhow::Result<()> {
                 MenuItem::action("Open File…", OpenFile),
                 MenuItem::action("Close Tab", CloseTab),
                 MenuItem::action("Reopen Closed Tab", ReopenTab),
+                MenuItem::separator(),
+                MenuItem::action("Print…", Print),
             ]),
             Menu::new("Edit").items([
                 MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
@@ -1694,6 +1913,15 @@ fn main() -> anyhow::Result<()> {
                 MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
                 MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
                 MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
+                MenuItem::separator(),
+                MenuItem::action("Find…", Find),
+                MenuItem::action("Find Next", FindNext),
+                MenuItem::action("Find Previous", FindPrevious),
+            ]),
+            Menu::new("View").items([
+                MenuItem::action("Actual Size", ActualSize),
+                MenuItem::action("Zoom In", ZoomIn),
+                MenuItem::action("Zoom Out", ZoomOut),
             ]),
             Menu::new("Navigate").items([
                 MenuItem::action("Open Location", FocusAddress),

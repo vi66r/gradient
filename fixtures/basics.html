@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Page basics</title>
+<style>
+  body { font: 16px/1.5 -apple-system, sans-serif; max-width: 680px; margin: 40px auto; padding: 0 20px; color: #1d232c; }
+  #stage { height: 220px; border-radius: 12px; display: grid; place-items: center; color: white;
+           background: linear-gradient(135deg, #1f2a44, #3f63e0); }
+  #stage:fullscreen { border-radius: 0; }
+  .far { margin-top: 1400px; }
+  #status { font: 13px ui-monospace, monospace; color: #6b7280; }
+  @media (prefers-color-scheme: dark) { body { background: #1f1f1f; color: #e6e8ec; } }
+  @media print { button, #status { display: none; } }
+</style>
+</head>
+<body>
+<h1>Page basics</h1>
+<p id="status"></p>
+<p>The lantern hung by the door. A second lantern waited on the shelf, and a third Lantern glowed in the window.</p>
+<div id="stage">
+  <div>
+    <p>Fullscreen stage</p>
+    <button onclick="document.getElementById('stage').requestFullscreen()">Enter fullscreen</button>
+    <button onclick="document.exitFullscreen()">Exit fullscreen</button>
+  </div>
+</div>
+<p>Nothing to find here but lanterns: lantern, lantern, LANTERN.</p>
+<p class="far">Far below, the last lantern.</p>
+<script>
+  const status = document.getElementById('status');
+  const show = () => status.textContent =
+    `innerWidth ${innerWidth} · fullscreen ${document.fullscreenElement ? document.fullscreenElement.id : 'none'}`;
+  addEventListener('resize', show);
+  document.addEventListener('fullscreenchange', show);
+  show();
+</script>
+</body>
+</html>
