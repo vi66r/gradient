@@ -57,8 +57,8 @@ pub(crate) fn palette(dark: bool) -> Palette {
 const SIDEBAR: f32 = 248.;
 /// Matches the native page host's corner radius in engine.rs.
 /// The page card sits below the toolbar and runs flush to the window's right
-/// and bottom edges; only its sidebar-facing corners are rounded, so it reads
-/// as lying above the chrome rather than framed inside the window.
+/// and bottom edges. Its top corners and its sidebar-facing bottom corner are
+/// rounded; the window's own corner rounds the last one.
 pub(crate) const CARD_RADIUS: f32 = 20.;
 /// The titlebar row: the traffic lights over the sidebar, the toolbar over
 /// the page card. Window chrome, in the palette's colors whatever the page.
@@ -1309,7 +1309,9 @@ impl Render for Browser {
                             .flex()
                             .flex_col()
                             .overflow_hidden()
-                            .rounded_l(px(CARD_RADIUS))
+                            .rounded_tl(px(CARD_RADIUS))
+                            .rounded_tr(px(CARD_RADIUS))
+                            .rounded_bl(px(CARD_RADIUS))
                             .bg(rgb(p.card))
                             .border_l_1()
                             .border_t_1()
@@ -1900,13 +1902,23 @@ impl Browser {
             .size_full()
             .relative()
             .overflow_hidden()
-            .rounded_l(radius)
-            .children(image.map(|image| img(image).size_full().rounded_l(radius)))
+            .rounded_tl(radius)
+            .rounded_tr(radius)
+            .rounded_bl(radius)
+            .children(image.map(|image| {
+                img(image)
+                    .size_full()
+                    .rounded_tl(radius)
+                    .rounded_tr(radius)
+                    .rounded_bl(radius)
+            }))
             .child(
                 div()
                     .absolute()
                     .size_full()
-                    .rounded_l(radius)
+                    .rounded_tl(radius)
+                    .rounded_tr(radius)
+                    .rounded_bl(radius)
                     .bg(black(veil * reveal)),
             )
             .on_mouse_down(

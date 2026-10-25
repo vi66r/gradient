@@ -1578,14 +1578,18 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
             host.setWantsLayer(true);
             let layer: *mut objc2::runtime::AnyObject = objc2::msg_send![&host, layer];
             if let Some(layer) = layer.as_ref() {
-                // The page card is flush with the window's right and bottom
-                // edges, so only its sidebar-facing corners round (MinY is
-                // the bottom in an unflipped layer).
+                // The page card rounds its top corners and its bottom-left;
+                // the window's corner rounds the bottom-right (MinY is the
+                // bottom in an unflipped layer).
                 const BOTTOM_LEFT: usize = 1; // kCALayerMinXMinYCorner
                 const TOP_LEFT: usize = 4; // kCALayerMinXMaxYCorner
+                const TOP_RIGHT: usize = 8; // kCALayerMaxXMaxYCorner
                 let radius = f64::from(crate::ui::CARD_RADIUS - 1.);
                 let _: () = objc2::msg_send![layer, setCornerRadius: radius];
-                let _: () = objc2::msg_send![layer, setMaskedCorners: BOTTOM_LEFT | TOP_LEFT];
+                let _: () = objc2::msg_send![
+                    layer,
+                    setMaskedCorners: BOTTOM_LEFT | TOP_LEFT | TOP_RIGHT
+                ];
                 let _: () = objc2::msg_send![layer, setMasksToBounds: true];
             }
             container.addSubview(&host);
