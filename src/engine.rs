@@ -1124,6 +1124,7 @@ fn page_configuration(
     } else {
         unsafe { WKWebsiteDataStore::dataStoreForIdentifier(&NSUUID::from_bytes(profile), mtm) }
     };
+    extensions::attach(&config, mtm);
     unsafe {
         config.setWebsiteDataStore(&store);
         config.preferences().setElementFullscreenEnabled(true);
@@ -1391,6 +1392,8 @@ mod notifications;
 #[cfg(target_os = "macos")]
 mod site;
 
+#[cfg(target_os = "macos")]
+mod extensions;
 #[cfg(target_os = "macos")]
 mod fade;
 #[cfg(target_os = "macos")]

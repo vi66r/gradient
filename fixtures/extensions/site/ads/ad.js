@@ -1,0 +1,1 @@
+window.adLoaded = true;
