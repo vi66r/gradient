@@ -1,7 +1,8 @@
-//! The page's own color, so the shell's control strip above it can match: the
-//! first step toward "UI-less" pages whose window takes on the site's theme.
+//! The page's own color, painted behind the page while WebKit has nothing
+//! drawn, and the first step toward "UI-less" pages whose window takes on the
+//! site's theme.
 //!
-//! In order of preference, all key-value observable so the strip follows live
+//! In order of preference, all key-value observable so the color follows live
 //! (new pages, SPAs switching themes) without scripts or polling:
 //! 0. Browser's own sample: a tiny snapshot of the page's top edge, taken after
 //!    each load and again over the next few seconds. WebKit samples only at
@@ -253,8 +254,8 @@ fn rgb(red: f64, green: f64, blue: f64) -> u32 {
 }
 
 /// The first opaque color of: what's visible at the top, the declared theme
-/// color, the page background. Translucent colors can't be matched by an
-/// opaque strip, so they're skipped.
+/// color, the page background. Translucent colors can't stand in for the
+/// page on an opaque backdrop, so they're skipped.
 fn pick(
     sampled: Option<(u32, f64)>,
     theme: Option<(u32, f64)>,

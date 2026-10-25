@@ -104,7 +104,7 @@ struct Tab {
     /// reported right after can wait for the painted one.
     committed: Option<std::time::Instant>,
     /// The new document is held out of sight until it first paints; then it
-    /// fades in as the strip and edge take its color. See `reveal`.
+    /// fades in over its host, which takes its color. See `reveal`.
     fade_pending: bool,
     /// A color reported while the page was held, applied when it shows.
     pending_tint: Option<Option<u32>>,
@@ -540,7 +540,7 @@ impl Browser {
         // fallback panel color depends on the shell's theme.
         for tab in self.all_tabs() {
             if let Some(page) = &tab.page {
-                page.set_edge_color(ui::strip_color(tab.tint, self.dark));
+                page.set_backdrop(ui::page_color(tab.tint, self.dark));
             }
         }
         cx.notify();
@@ -581,7 +581,7 @@ impl Browser {
             cx,
         ) {
             Ok(page) => {
-                page.set_edge_color(ui::strip_color(tab.tint, self.dark));
+                page.set_backdrop(ui::page_color(tab.tint, self.dark));
                 // Before the first paint, so a zoomed site never flashes at 100%.
                 tab.zoom = zoom::site(&tab.saved.url)
                     .map_or(1., |site| self.zooms.get(&site, tab.private));
@@ -785,7 +785,7 @@ impl Browser {
         }
         let private = self.tabs[index].private;
         let position = if popup { index } else { 0 };
-        page.set_edge_color(ui::strip_color(None, self.dark));
+        page.set_backdrop(ui::page_color(None, self.dark));
         let mut tab = Tab::new(id, url, private);
         tab.page = Some(page);
         tab.loading = true;
@@ -1445,10 +1445,10 @@ impl Browser {
 
     /// WebKit reports its default white for a moment after each commit, before
     /// the page's own background arrives; apply only colors that hold briefly
-    /// so the strip doesn't flash on dark sites.
+    /// so the page's backdrop doesn't flash on dark sites.
     fn settle_tint(&mut self, id: u64, tint: Option<u32>, definite: bool, cx: &mut Context<Self>) {
         /// How long after a commit a background-only color waits for the
-        /// page's painted one, so the strip doesn't go old → white → dark.
+        /// page's painted one, so the backdrop doesn't go old → white → dark.
         const PAINT_GRACE: Duration = Duration::from_millis(600);
         let Some(tab) = self.tab_mut(id) else {
             return;
@@ -1456,7 +1456,7 @@ impl Browser {
         tab.tint_epoch = tab.tint_epoch.wrapping_add(1);
         let epoch = tab.tint_epoch;
         // One frame: WebKit reports its colors in a burst, and waiting
-        // longer would leave the strip behind the page.
+        // longer would leave the backdrop behind the page.
         let mut wait = Duration::from_millis(16);
         if !definite && let Some(committed) = tab.committed {
             wait = wait.max(PAINT_GRACE.saturating_sub(committed.elapsed()));
@@ -1485,14 +1485,14 @@ impl Browser {
         {
             tab.tint = tint;
             if let Some(page) = &tab.page {
-                page.set_edge_color(ui::strip_color(tint, dark));
+                page.set_backdrop(ui::page_color(tint, dark));
             }
             cx.notify();
         }
     }
 
-    /// A held page painted: it fades in while the strip and the edge under it
-    /// take its color, all at once, at one speed.
+    /// A held page painted: it fades in while its host takes its color, at
+    /// one speed.
     fn reveal(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(tab) = self.tab_mut(id).filter(|tab| tab.fade_pending) else {
             return;
@@ -1652,7 +1652,7 @@ impl Browser {
                     tab.committed = Some(std::time::Instant::now());
                     // Held out of sight, over the host painted in the old
                     // color, until WebKit presents it; then it fades in as the
-                    // strip, the edge and the host take its color.
+                    // host takes its color.
                     tab.fade_pending = fade;
                     tab.pending_tint = None;
                     if let Some(page) = &tab.page {
@@ -2470,7 +2470,7 @@ fn main() -> anyhow::Result<()> {
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(16.), px(16.))),
                 }),
-                // The shell draws its own titlebar: the page strip and the
+                // The shell draws its own titlebar: the toolbar and the
                 // sidebar's top row move the window themselves, so controls
                 // inside the titlebar band never start a native drag.
                 app_owns_titlebar_drag: true,

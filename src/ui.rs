@@ -56,15 +56,12 @@ pub(crate) fn palette(dark: bool) -> Palette {
 
 const SIDEBAR: f32 = 248.;
 /// Matches the native page host's corner radius in engine.rs.
-/// The page panel runs flush to the window's top, right and bottom edges; only
-/// its sidebar-facing corners are rounded, so it reads as lying above the
-/// sidebar rather than framed inside the window.
+/// The page card sits below the toolbar and runs flush to the window's right
+/// and bottom edges; only its sidebar-facing corners are rounded, so it reads
+/// as lying above the chrome rather than framed inside the window.
 pub(crate) const CARD_RADIUS: f32 = 20.;
-/// The draggable strip across the top of the page panel: a calm "control
-/// zone" in the titlebar band, tinted with the page's own color. It is where
-/// a full-page app's chrome will live once pages can go UI-less.
-/// Matches the sidebar's top row so its contents share the traffic lights'
-/// centerline.
+/// The titlebar row: the traffic lights over the sidebar, the toolbar over
+/// the page card. Window chrome, in the palette's colors whatever the page.
 const CONTROL_ZONE: f32 = 44.;
 /// Radius scale. Controls (address field, tab cells, rows) share one radius,
 /// standalone buttons a step smaller, and anything nested inside a control
@@ -77,12 +74,7 @@ const MEDIA_STRIP: f32 = 30.;
 const FIND_BAR: f32 = 264.;
 /// The suggestions list's radius: the pill's curve, a step tighter.
 const R_LIST: f32 = 14.;
-/// Matches the native page's edge dissolve (engine/fade.rs).
-const EDGE_FADE: f32 = 14.;
 const FAST: Duration = Duration::from_millis(140);
-/// The strip's color change; the page's fade-in and the edge dissolve under
-/// the strip use the same duration and curve (`engine::fade::MOTION`).
-const STRIP: Duration = Duration::from_millis(240);
 const NORMAL: Duration = Duration::from_millis(200);
 
 fn hsla(color: u32) -> Hsla {
@@ -1303,55 +1295,70 @@ impl Render for Browser {
             }))
             .child(self.sidebar(window, cx))
             .child(
-                div().flex_1().min_w_0().h_full().child(
-                    div()
-                        .size_full()
-                        .flex()
-                        .flex_col()
-                        .overflow_hidden()
-                        .rounded_l(px(CARD_RADIUS))
-                        .bg(rgb(p.card))
-                        .border_l_1()
-                        .border_color(panel_edge(self.dark))
-                        .shadow(panel_shadow(self.dark))
-                        .child(self.control_zone(p, window, cx))
-                        .child(body)
-                        .children(self.suggestion_list(p, reveal, cx))
-                        .when_some(self.notice.clone(), |d, message| {
-                            d.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .min_h(px(36.))
-                                    .px_3()
-                                    .py_1()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .border_t_1()
-                                    .border_color(rgb(p.line))
-                                    .bg(rgb(p.field))
-                                    .text_size(px(12.))
-                                    .child(
-                                        Icon::new(IconName::Info)
-                                            .size_3p5()
-                                            .text_color(rgb(p.muted)),
-                                    )
-                                    .child(div().flex_1().min_w_0().child(message))
-                                    .child(
-                                        icon_button("dismiss-notice", "Dismiss", IconName::X, p)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.notice = None;
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .with_animation(
-                                        "notice-enter",
-                                        Animation::new(NORMAL).with_easing(ease_out_quint()),
-                                        |bar, delta| bar.opacity(delta),
-                                    ),
-                            )
-                        }),
-                ),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .child(self.control_zone(p, window, cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .overflow_hidden()
+                            .rounded_l(px(CARD_RADIUS))
+                            .bg(rgb(p.card))
+                            .border_l_1()
+                            .border_t_1()
+                            .border_color(panel_edge(self.dark))
+                            .shadow(panel_shadow(self.dark))
+                            .child(body)
+                            .children(self.suggestion_list(p, reveal, cx))
+                            .when_some(self.notice.clone(), |d, message| {
+                                d.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .min_h(px(36.))
+                                        .px_3()
+                                        .py_1()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .border_t_1()
+                                        .border_color(rgb(p.line))
+                                        .bg(rgb(p.field))
+                                        .text_size(px(12.))
+                                        .child(
+                                            Icon::new(IconName::Info)
+                                                .size_3p5()
+                                                .text_color(rgb(p.muted)),
+                                        )
+                                        .child(div().flex_1().min_w_0().child(message))
+                                        .child(
+                                            icon_button(
+                                                "dismiss-notice",
+                                                "Dismiss",
+                                                IconName::X,
+                                                p,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.notice = None;
+                                                    cx.notify();
+                                                }),
+                                            ),
+                                        )
+                                        .with_animation(
+                                            "notice-enter",
+                                            Animation::new(NORMAL).with_easing(ease_out_quint()),
+                                            |bar, delta| bar.opacity(delta),
+                                        ),
+                                )
+                            }),
+                    ),
             )
     }
 }
@@ -1382,19 +1389,16 @@ fn panel_shadow(dark: bool) -> Vec<BoxShadow> {
 }
 
 impl Browser {
-    /// The control strip's color, its ink, and whether that ink is light: the
-    /// page's own color when it has one.
-    fn strip_look(&self, p: Palette) -> (u32, u32, bool) {
-        let tab = &self.tabs[self.active];
-        let tint = tab.tint.filter(|_| !self.lab && tab.page.is_some());
-        let ink = tint.map(readable_on).unwrap_or(p.ink);
-        let over_dark = ink == 0xf2f3f5 || (tint.is_none() && self.dark);
-        (tint.unwrap_or(p.card), ink, over_dark)
+    /// The toolbar's solid surface (for the suggestions list), its ink, and
+    /// whether that ink is light. The toolbar is chrome over the Space's
+    /// frosted veil, so it never takes the page's color.
+    fn toolbar_look(&self, p: Palette) -> (u32, u32, bool) {
+        (p.card, p.ink, self.dark)
     }
 
-    /// The page's own top bar: navigation, a borderless address and page
-    /// actions on a strip tinted with the page's color. Empty space drags the
-    /// window (double-click zooms); controls keep their clicks to themselves.
+    /// The toolbar in the titlebar row, above the page card: navigation, a
+    /// borderless address and page actions. Empty space drags the window
+    /// (double-click zooms); controls keep their clicks to themselves.
     fn control_zone(
         &self,
         p: Palette,
@@ -1402,15 +1406,14 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let tab = &self.tabs[self.active];
-        let (background, ink, over_dark) = self.strip_look(p);
-        // The theme's caret is a fixed primary that can vanish on a page's
-        // color; the strip's ink always reads. Request Lab's fields sit on
-        // the palette, where the untinted ink is the palette's own.
+        let (background, ink, over_dark) = self.toolbar_look(p);
+        // The theme's caret is a fixed primary; the toolbar's ink reads on
+        // the veil in every Space color.
         let caret: Hsla = rgb(ink).into();
         if cx.theme().caret != caret {
             Theme::global_mut(cx).caret = caret;
         }
-        // Hover washes that work on any page color.
+        // Hover washes that work on any Space color.
         let wash = if over_dark { 0xffffff1f } else { 0x0000000f };
         let live = tab.page.is_some() && !self.lab;
         let addressed = tab.saved.url != START;
@@ -1418,42 +1421,23 @@ impl Browser {
         div()
             .id("control-zone")
             .h(px(CONTROL_ZONE))
-            // GPUI clips children to rectangles, not the panel's rounded
-            // shape, so the strip rounds its own corner to match.
-            .rounded_tl(px(CARD_RADIUS))
             .flex_shrink_0()
             .relative()
             .px_2()
             .flex()
             .items_center()
             .gap_0p5()
-            // Eased with the page's fade-in, so a new site arrives as one.
-            // Keyed by tab: switching tabs swaps the page at once, and the
-            // strip lands with it instead of trailing over from the last tab.
-            .bg(Hsla::from(motion::transition(
-                format!("strip-background-{}", tab.id),
-                Rgb::from(background),
-                Transition::new(STRIP),
-                window,
-                cx,
-            )))
-            .text_color(motion::transition(
-                format!("strip-ink-{}", tab.id),
-                Rgb::from(ink),
-                Transition::new(STRIP),
-                window,
-                cx,
-            ))
+            .text_color(rgb(ink))
             .child(
-                strip_button("back", "Back", IconName::ChevronLeft, wash)
+                toolbar_button("back", "Back", IconName::ChevronLeft, wash)
                     .on_click(cx.listener(|this, _, _, _| this.history(false))),
             )
             .child(
-                strip_button("forward", "Forward", IconName::ChevronRight, wash)
+                toolbar_button("forward", "Forward", IconName::ChevronRight, wash)
                     .on_click(cx.listener(|this, _, _, _| this.history(true))),
             )
             .child(
-                strip_button("reload", "Reload", IconName::RotateCw, wash)
+                toolbar_button("reload", "Reload", IconName::RotateCw, wash)
                     .on_click(cx.listener(|this, _, w, cx| this.reload(w, cx))),
             )
             .child(self.address(Glass { over_dark }, window, cx))
@@ -1493,7 +1477,7 @@ impl Browser {
             .children(self.find_bar(Glass { over_dark }, wash, window, cx))
             .when(addressed, |strip| {
                 strip.child(
-                    strip_button(
+                    toolbar_button(
                         "copy-url",
                         if copied {
                             "Address copied"
@@ -1517,7 +1501,7 @@ impl Browser {
             })
             .when(live, |strip| {
                 strip.child(
-                    strip_button("inspector", "Inspect page", IconName::Code, wash).on_click(
+                    toolbar_button("inspector", "Inspect page", IconName::Code, wash).on_click(
                         cx.listener(|this, _, _, _| {
                             if let Some(page) = &this.tabs[this.active].page {
                                 page.raw.open_devtools();
@@ -1531,7 +1515,7 @@ impl Browser {
             })
             .when(!self.lab && self.has_extensions(), |strip| {
                 strip.child(
-                    strip_button("extensions", "Extensions", IconName::Puzzle, wash).on_click(
+                    toolbar_button("extensions", "Extensions", IconName::Puzzle, wash).on_click(
                         cx.listener(|this, event: &ClickEvent, window, cx| {
                             this.extensions_menu(event.position(), window, cx)
                         }),
@@ -1561,7 +1545,7 @@ impl Browser {
     }
 
     /// Extensions' toolbar buttons: their own icons at full color, a
-    /// disabled one faded, and a badge as a small pill in the strip's ink.
+    /// disabled one faded, and a badge as a small pill in the toolbar's ink.
     /// A click runs the action (or opens its popup beneath the button); a
     /// right-click opens the extension's menu.
     fn extension_buttons(
@@ -1683,7 +1667,7 @@ impl Browser {
             .then(|| self.find_matches.map(find_label))
             .flatten();
         let control = |id: &'static str, title: &str, icon: IconName| {
-            strip_control(id, title, icon, wash, 22.).rounded_full()
+            toolbar_control(id, title, icon, wash, 22.).rounded_full()
         };
         Some(
             div()
@@ -1748,14 +1732,13 @@ impl Browser {
         )
     }
 
-    /// The address, filling the strip between the buttons. At rest it is
-    /// just the site's icon and host on the strip itself, left-aligned, with
-    /// no field around it. Editing lifts a glass pill out of the strip (fill,
-    /// hairline and shadow ease in together) while the content cross-fades,
-    /// and both states share one layout so nothing jumps. Its text and caret
-    /// take the strip's ink, so they read on any page color. Dragging the
-    /// resting address moves the window, since it covers most of the strip's
-    /// drag area.
+    /// The address, filling the toolbar between the buttons. At rest it is
+    /// just the site's icon and host on the toolbar itself, left-aligned,
+    /// with no field around it. Editing lifts a glass pill out of the toolbar
+    /// (fill, hairline and shadow ease in together) while the content
+    /// cross-fades, and both states share one layout so nothing jumps.
+    /// Dragging the resting address moves the window, since it covers most
+    /// of the toolbar's drag area.
     fn address(&self, glass: Glass, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let tab = &self.tabs[self.active];
         let editing = self.address.read(cx).focus_handle(cx).is_focused(window);
@@ -1902,8 +1885,7 @@ impl Browser {
 
 impl Browser {
     /// The page's picture while the suggestions cover it (`suggest::Cover`),
-    /// finished as the live page is: the strip's edge dissolve on top and the
-    /// panel's rounded corner. A faint veil sets the list above it. Clicking
+    /// with the card's rounded corners, as the live page has. A faint veil sets the list above it. Clicking
     /// it puts the list away and hands focus back to the page.
     fn page_picture(
         &self,
@@ -1911,7 +1893,6 @@ impl Browser {
         reveal: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let edge = hsla(strip_color(self.tabs[self.active].tint, self.dark));
         let radius = px(CARD_RADIUS - 1.);
         let veil = if self.dark { 0.14 } else { 0.035 };
         div()
@@ -1919,26 +1900,13 @@ impl Browser {
             .size_full()
             .relative()
             .overflow_hidden()
-            .rounded_bl(radius)
-            .children(image.map(|image| img(image).size_full().rounded_bl(radius)))
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(EDGE_FADE))
-                    .bg(linear_gradient(
-                        180.,
-                        linear_color_stop(edge, 0.),
-                        linear_color_stop(edge.opacity(0.), 1.),
-                    )),
-            )
+            .rounded_l(radius)
+            .children(image.map(|image| img(image).size_full().rounded_l(radius)))
             .child(
                 div()
                     .absolute()
                     .size_full()
-                    .rounded_bl(radius)
+                    .rounded_l(radius)
                     .bg(black(veil * reveal)),
             )
             .on_mouse_down(
@@ -1952,7 +1920,7 @@ impl Browser {
     }
 
     /// The suggestions, hung just below the address pill and as wide: the
-    /// pill's glass made solid on the strip's color, with a soft lift. It
+    /// pill's glass made solid, with a soft lift. It
     /// eases in and out with a small drop, over the page's picture.
     fn suggestion_list(
         &self,
@@ -1964,7 +1932,7 @@ impl Browser {
             return None;
         }
         let anchor = self.address_bounds.get();
-        let (background, ink, over_dark) = self.strip_look(p);
+        let (background, ink, over_dark) = self.toolbar_look(p);
         let glass = Glass { over_dark };
         let terms = suggest::terms(&self.suggest.typed);
         let (wash, hover) = if over_dark {
@@ -2118,8 +2086,8 @@ fn emphasized(text: &str, terms: &[String]) -> StyledText {
     StyledText::new(text.to_string()).with_highlights(merged.into_iter().map(|range| (range, bold)))
 }
 
-/// Translucent layers for the address pill, tuned to the strip beneath it:
-/// white glass over dark strips, frosted white over light ones. `lift` runs
+/// Translucent layers for the address pill, tuned to the chrome beneath it:
+/// white glass over dark chrome, frosted white over light. `lift` runs
 /// 0 (resting: nothing visible) to 1 (editing).
 #[derive(Clone, Copy)]
 struct Glass {
@@ -2140,7 +2108,7 @@ impl Glass {
     }
 
     /// The glass as one opaque color over `under`, for surfaces that leave
-    /// the strip (the suggestions list).
+    /// the toolbar (the suggestions list).
     fn solid(self, under: u32) -> Hsla {
         let alpha = if self.over_dark { 0.12 } else { 0.72 };
         motion::Interpolate::interpolate(&Rgb::from(under), &Rgb::from(0xffffff), alpha).into()
@@ -2202,14 +2170,14 @@ fn move_window(event: &MouseDownEvent, window: &mut Window, _: &mut App) {
     }
 }
 
-/// A control on the page-tinted strip: inherits the strip's ink, uses a
-/// translucent wash on hover, and never starts a window drag.
-fn strip_button(id: &'static str, title: &str, icon: IconName, wash: u32) -> Stateful<Div> {
-    strip_control(id, title, icon, wash, 28.)
+/// A control in the toolbar: inherits the toolbar's ink, uses a translucent
+/// wash on hover, and never starts a window drag.
+fn toolbar_button(id: &'static str, title: &str, icon: IconName, wash: u32) -> Stateful<Div> {
+    toolbar_control(id, title, icon, wash, 28.)
 }
 
-/// `strip_button` at another size; smaller ones nest inside pills.
-fn strip_control(
+/// `toolbar_button` at another size; smaller ones nest inside pills.
+fn toolbar_control(
     id: &'static str,
     title: &str,
     icon: IconName,
@@ -2282,9 +2250,8 @@ impl From<Rgb> for Hsla {
     }
 }
 
-/// The control strip's color for a page: its own tint, else the panel color.
 /// Whether two page colors look the same. Later samples of a page often
-/// differ by a step or two; moving the strip for that reads as a twitch.
+/// differ by a step or two; repainting the backdrop for that is wasted work.
 pub(crate) fn same_color(a: Option<u32>, b: Option<u32>) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => [16, 8, 0]
@@ -2294,22 +2261,9 @@ pub(crate) fn same_color(a: Option<u32>, b: Option<u32>) -> bool {
     }
 }
 
-pub(crate) fn strip_color(tint: Option<u32>, dark: bool) -> u32 {
+/// The color behind a page: its own tint, else the card's.
+pub(crate) fn page_color(tint: Option<u32>, dark: bool) -> u32 {
     tint.unwrap_or(palette(dark).card)
-}
-
-/// Dark or light text, whichever reads on `background` (`0xRRGGBB`).
-fn readable_on(background: u32) -> u32 {
-    let channel = |shift: u32| {
-        let value = ((background >> shift) & 0xff) as f32 / 255.;
-        if value <= 0.04045 {
-            value / 12.92
-        } else {
-            ((value + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    let luminance = 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
-    if luminance > 0.4 { 0x1d232c } else { 0xf2f3f5 }
 }
 
 /// A light veil of our palette over the system sidebar material, so the frost
@@ -2441,7 +2395,7 @@ mod tests {
     }
 
     #[core::prelude::v1::test]
-    fn tiny_sampling_differences_do_not_move_the_strip() {
+    fn tiny_sampling_differences_are_the_same_color() {
         assert!(same_color(Some(0x1f1f1f), Some(0x1e2021)));
         assert!(!same_color(Some(0x1f1f1f), Some(0x2a2a2a)));
         assert!(same_color(None, None));
@@ -2449,7 +2403,7 @@ mod tests {
     }
 
     #[core::prelude::v1::test]
-    fn strip_colors_blend_in_rgb_not_through_other_hues() {
+    fn colors_blend_in_rgb_not_through_other_hues() {
         // White to navy used to pass through teal (hue interpolation).
         let mid = Rgb::from(0xffffff).interpolate(&Rgb::from(0x1f2a44), 0.5);
         let expected = [

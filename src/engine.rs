@@ -11,9 +11,8 @@ pub enum Event {
     MediaChanged(u64),
     /// A new main-frame document committed (not same-document navigation).
     Committed(u64),
-    /// The page's own color (`0xRRGGBB`), for the control zone above it.
-    /// A page's color for the strip; `true` when it is definite (painted or
-    /// declared), not just the document background.
+    /// The page's own color (`0xRRGGBB`), painted behind it; `true` when it
+    /// is definite (painted or declared), not just the document background.
     PageTint(u64, Option<u32>, bool),
     /// A new document's first visually non-empty layout.
     Painted(u64),
@@ -661,7 +660,7 @@ pub struct Page {
     file_gate: FileGate,
     #[cfg(target_os = "macos")]
     media: media::Media,
-    /// Observes the page's color for the control strip (`Event::PageTint`).
+    /// Observes the page's color (`Event::PageTint`).
     #[cfg(target_os = "macos")]
     _theme: theme::Theme,
     #[cfg(target_os = "macos")]
@@ -674,11 +673,9 @@ pub struct Page {
     attaching: Cell<bool>,
     #[cfg(target_os = "macos")]
     host: std::cell::RefCell<Option<NativeHost>>,
-    /// The top-edge dissolve into the control strip, and its color.
+    /// The page's color, painted behind it (`fade::set_backdrop`).
     #[cfg(target_os = "macos")]
-    edge: std::cell::RefCell<Option<objc2::rc::Retained<fade::EdgeFade>>>,
-    #[cfg(target_os = "macos")]
-    edge_color: Cell<u32>,
+    backdrop: Cell<u32>,
 }
 
 impl Drop for Page {
@@ -948,8 +945,7 @@ impl Page {
             executor: host.foreground.clone(),
             attaching: Cell::new(false),
             host: std::cell::RefCell::new(None),
-            edge: std::cell::RefCell::new(None),
-            edge_color: Cell::new(0xffffff),
+            backdrop: Cell::new(0xffffff),
         }))
     }
 
@@ -995,14 +991,11 @@ impl Page {
         self.media.pause();
     }
 
-    /// The control strip's color above this page, for the edge dissolve.
-    pub fn set_edge_color(&self, color: u32) {
+    /// The page's color, shown behind it while WebKit has nothing drawn.
+    pub fn set_backdrop(&self, color: u32) {
         #[cfg(target_os = "macos")]
         {
-            self.edge_color.set(color);
-            if let Some(edge) = self.edge.borrow().as_ref() {
-                edge.set_color(color, true);
-            }
+            self.backdrop.set(color);
             if let Some(host) = self.host.borrow().as_ref() {
                 fade::set_backdrop(&host.0, color, true);
             }
@@ -1017,15 +1010,14 @@ impl Page {
         self._theme.reset();
     }
 
-    /// Samples the page's top edge for the strip (`Event::PageTint`).
+    /// Samples the page's top edge (`Event::PageTint`).
     pub fn sample_theme(&self) {
         #[cfg(target_os = "macos")]
         self._theme.sample();
     }
 
-    /// Fades a newly committed document in.
     /// A new document committed: hold the page out of sight until
-    /// `fade_in`; the host's color (the strip's) stands in.
+    /// `fade_in`; the host's color (the page's) stands in.
     pub fn hold(&self) {
         #[cfg(target_os = "macos")]
         {
@@ -1034,7 +1026,7 @@ impl Page {
         }
     }
 
-    /// Fades a held page in, in step with the strip.
+    /// Fades a held page in.
     pub fn fade_in(&self) {
         #[cfg(target_os = "macos")]
         {
@@ -1047,15 +1039,7 @@ impl Page {
     /// Find needs WebKit SPI and is macOS-only for now.
     pub fn find(&self, query: &str, step: FindStep) {
         #[cfg(target_os = "macos")]
-        {
-            self.find.find(query, step);
-            // WebKit dims the page under its find overlay. The dissolve into
-            // the strip would lay a light band over the dimmed top; the strip
-            // meets the overlay at a clean edge instead, as in Safari.
-            if let Some(edge) = self.edge.borrow().as_ref() {
-                edge.setHidden(true);
-            }
-        }
+        self.find.find(query, step);
         #[cfg(not(target_os = "macos"))]
         let _ = (query, step);
     }
@@ -1063,12 +1047,7 @@ impl Page {
     /// Clears find's overlay and highlights.
     pub fn end_find(&self) {
         #[cfg(target_os = "macos")]
-        {
-            self.find.end();
-            if let Some(edge) = self.edge.borrow().as_ref() {
-                edge.setHidden(false);
-            }
-        }
+        self.find.end();
     }
 
     /// Pictures the page as it is now, for the shell to show in its place
@@ -1421,8 +1400,8 @@ fn data_store(
 ///   (Gmail warned it was "no longer supported") and Browser blends in with
 ///   every Safari user instead of standing out;
 /// - WebKit's page-top color sampling (SPI, Safari's own settings), which
-///   reports the color actually visible at the top of the page for the
-///   control strip. Gmail paints dark inside a white document;
+///   reports the color actually visible at the top of the page. Gmail paints
+///   dark inside a white document;
 /// - element fullscreen (`requestFullscreen`, video players' fullscreen
 ///   buttons). WebKit moves the page into a fullscreen window of its own and
 ///   back into its host on exit; Wry turns this on too, but the page's
@@ -1599,13 +1578,14 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
             host.setWantsLayer(true);
             let layer: *mut objc2::runtime::AnyObject = objc2::msg_send![&host, layer];
             if let Some(layer) = layer.as_ref() {
-                // The control zone covers the panel's top-left corner, so the
-                // page rounds only its bottom-left (MinY is the bottom in an
-                // unflipped layer).
+                // The page card is flush with the window's right and bottom
+                // edges, so only its sidebar-facing corners round (MinY is
+                // the bottom in an unflipped layer).
                 const BOTTOM_LEFT: usize = 1; // kCALayerMinXMinYCorner
+                const TOP_LEFT: usize = 4; // kCALayerMinXMaxYCorner
                 let radius = f64::from(crate::ui::CARD_RADIUS - 1.);
                 let _: () = objc2::msg_send![layer, setCornerRadius: radius];
-                let _: () = objc2::msg_send![layer, setMaskedCorners: BOTTOM_LEFT];
+                let _: () = objc2::msg_send![layer, setMaskedCorners: BOTTOM_LEFT | TOP_LEFT];
                 let _: () = objc2::msg_send![layer, setMasksToBounds: true];
             }
             container.addSubview(&host);
@@ -1616,10 +1596,7 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
                 NSAutoresizingMaskOptions::ViewWidthSizable
                     | NSAutoresizingMaskOptions::ViewHeightSizable,
             );
-            // Above the page, so it dissolves into the control strip.
-            *page.edge.borrow_mut() =
-                Some(fade::EdgeFade::attach(&host, mtm, page.edge_color.get()));
-            fade::set_backdrop(&host, page.edge_color.get(), false);
+            fade::set_backdrop(&host, page.backdrop.get(), false);
             *page.host.borrow_mut() = Some(NativeHost(host));
         }
         if let Some(host) = page.host.borrow().as_ref() {
