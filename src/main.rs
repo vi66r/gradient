@@ -3,6 +3,7 @@ mod agent;
 mod assets;
 mod downloads;
 mod engine;
+mod extensions;
 mod favicon;
 mod http_client;
 mod lifecycle;
@@ -45,6 +46,7 @@ actions!(
         RequestLab,
         Inspect,
         SitePermissions,
+        AddExtension,
         Suspend,
         ToggleAgent,
         Find,
@@ -226,6 +228,11 @@ struct Browser {
     /// Tabs a page opened, and the tab that opened each, so a popup that only
     /// started a download can close and hand the download back.
     popups: HashMap<u64, u64>,
+    /// Installed web extensions, per Space; see `extensions.rs`.
+    extensions: extensions::Store,
+    /// The current Space's toolbar buttons for the tab in front.
+    extension_actions: Vec<extensions::ActionButton>,
+    extension_anchors: extensions::Anchors,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -319,6 +326,7 @@ impl Browser {
         let permissions = permissions::Store::open(store.dir());
         let icon_cache = favicon::DiskCache::new(store.dir());
         let zooms = zoom::Zooms::load(store.dir());
+        let installed = extensions::Store::open(store.dir());
         let mut this = Self {
             tabs: restored.tabs,
             parked: restored.parked,
@@ -366,6 +374,9 @@ impl Browser {
             downloads: Vec::new(),
             downloads_polling: false,
             popups: HashMap::new(),
+            extensions: installed,
+            extension_actions: Vec::new(),
+            extension_anchors: Default::default(),
             _subscriptions: vec![
                 address_events,
                 find_events,
@@ -376,6 +387,9 @@ impl Browser {
             ],
         };
         engine::set_notification_sites(this.notification_sites());
+        // Before the first page, so it joins a controller with its Space's
+        // extensions already loading.
+        this.start_extensions(cx);
         #[cfg(target_os = "macos")]
         engine::install_backdrop(window);
         this.follow_appearance(window, cx);
@@ -1646,6 +1660,7 @@ impl Browser {
                 reply,
                 value,
             } => self.finish_agent(id, epoch, origin, reply, value),
+            engine::Event::Extension(event) => self.extension_event(event, window, cx),
         }
         cx.notify();
     }
@@ -2263,6 +2278,7 @@ fn main() -> anyhow::Result<()> {
                 MenuItem::action("Request Lab", RequestLab),
                 MenuItem::action("Inspect Page", Inspect),
                 MenuItem::action("Site Permissions…", SitePermissions),
+                MenuItem::action("Add Extension…", AddExtension),
                 MenuItem::action("Suspend Current Tab…", Suspend),
                 MenuItem::action("Share / Revoke Agent Access…", ToggleAgent),
             ]),

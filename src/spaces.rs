@@ -234,6 +234,7 @@ impl Browser {
         for index in 0..self.tabs.len() {
             self.request_icon(index);
         }
+        self.refresh_extension_actions();
         self.save();
     }
 
@@ -263,6 +264,8 @@ impl Browser {
                     color: 0,
                     private: true,
                 });
+                // Before its first page joins the controller.
+                self.apply_private_extensions(cx);
                 self.spaces.len() - 1
             }
         };
@@ -290,6 +293,7 @@ impl Browser {
             self.space -= 1;
         }
         self.before_private = None;
+        engine::forget_extensions(id, false);
         engine::forget_private_store(id);
         self.prune_downloads();
         cx.notify();
@@ -545,6 +549,7 @@ impl Browser {
         if let Err(error) = self.permissions.forget_profile(&id) {
             self.notice = Some(error.to_string());
         }
+        self.forget_space_extensions(id, cx);
         engine::set_notification_sites(self.notification_sites());
         let events = self.events.clone();
         cx.spawn(async move |_, cx| {

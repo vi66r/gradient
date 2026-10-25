@@ -1108,6 +1108,9 @@ impl Browser {
 
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Every change to the tabs ends in a render, so extensions hear of
+        // them here; unchanged tabs cost a comparison.
+        self.sync_extension_tabs();
         let p = palette(self.dark);
         let tab = &self.tabs[self.active];
         let (content, key): (AnyElement, SharedString) = if self.lab {
@@ -1230,6 +1233,12 @@ impl Render for Browser {
             .on_action(cx.listener(|this, _: &Print, _, _| this.print()))
             .on_action(cx.listener(|this, _: &Suspend, w, cx| this.suspend(w, cx)))
             .on_action(cx.listener(|this, _: &SitePermissions, w, cx| this.site_permissions(w, cx)))
+            .on_action(cx.listener(|this, _: &AddExtension, w, cx| this.add_extension(w, cx)))
+            .on_action(
+                cx.listener(|this, action: &extensions::ExtensionMenu, w, cx| {
+                    this.extension_command(action, w, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &ToggleAgent, w, cx| this.toggle_agent(w, cx)))
             .on_action(cx.listener(|this, _: &Quit, w, cx| {
                 this.request_discard(lifecycle::Discard::Quit, w, cx);
@@ -1449,6 +1458,18 @@ impl Browser {
                     ),
                 )
             })
+            .when(!self.lab, |strip| {
+                strip.children(self.extension_buttons(wash, ink, background, cx))
+            })
+            .when(!self.lab && self.has_extensions(), |strip| {
+                strip.child(
+                    strip_button("extensions", "Extensions", IconName::Puzzle, wash).on_click(
+                        cx.listener(|this, event: &ClickEvent, window, cx| {
+                            this.extensions_menu(event.position(), window, cx)
+                        }),
+                    ),
+                )
+            })
             .when(tab.loading && !self.lab, |strip| {
                 strip.child(
                     div()
@@ -1469,6 +1490,102 @@ impl Browser {
                 )
             })
             .on_mouse_down(MouseButton::Left, move_window)
+    }
+
+    /// Extensions' toolbar buttons: their own icons at full color, a
+    /// disabled one faded, and a badge as a small pill in the strip's ink.
+    /// A click runs the action (or opens its popup beneath the button); a
+    /// right-click opens the extension's menu.
+    fn extension_buttons(
+        &self,
+        wash: u32,
+        ink: u32,
+        background: u32,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        self.extension_actions
+            .iter()
+            .map(|action| {
+                let tip: SharedString = action.label.clone().into();
+                let (clicked, menu, anchor) = (
+                    action.install.clone(),
+                    action.install.clone(),
+                    action.install.clone(),
+                );
+                let anchors = self.extension_anchors.clone();
+                let icon = match &action.icon {
+                    Some(icon) => img(icon.clone()).size(px(16.)).into_any_element(),
+                    None => Icon::new(IconName::Puzzle).size_4().into_any_element(),
+                };
+                let badge: String = action.badge.chars().take(4).collect();
+                div()
+                    .id(SharedString::from(format!("extension-{}", action.install)))
+                    .role(Role::Button)
+                    .aria_label(action.label.clone())
+                    .relative()
+                    .size(px(28.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(R_BUTTON))
+                    .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.extension_menu(&menu, event.position, window, cx)
+                        }),
+                    )
+                    .when(action.enabled, |button| {
+                        button
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(rgba(wash)))
+                            .active(|s| s.opacity(0.7))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.perform_extension_action(&clicked);
+                                cx.notify();
+                            }))
+                    })
+                    .when(!action.enabled, |button| button.opacity(0.4))
+                    .child(
+                        canvas(
+                            move |bounds, _, _| {
+                                anchors.borrow_mut().insert(anchor.clone(), bounds);
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
+                    )
+                    .child(icon)
+                    .when(!badge.is_empty(), |button| {
+                        button.child(
+                            div()
+                                .absolute()
+                                .top(px(2.))
+                                .right(px(0.))
+                                .h(px(12.))
+                                .min_w(px(12.))
+                                .px(px(3.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .bg(rgb(ink))
+                                .text_color(rgb(background))
+                                .text_size(px(8.5))
+                                .line_height(px(12.))
+                                .font_weight(FontWeight::BOLD)
+                                .child(badge),
+                        )
+                    })
+                    .into_any_element()
+            })
+            .collect()
     }
 
     /// Find in page: the same lifted glass pill the address becomes while

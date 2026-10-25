@@ -105,6 +105,252 @@ pub enum Event {
         reply: std::sync::mpsc::SyncSender<Result<serde_json::Value, String>>,
         value: String,
     },
+    /// Something a web extension did or asked for; see `extensions.rs`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Extension(ExtensionEvent),
+}
+
+/// What web extensions tell or ask the shell.
+#[derive(Debug)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub enum ExtensionEvent {
+    /// An extension started in a Space, or failed to.
+    Loaded {
+        space: [u8; 16],
+        install: String,
+        error: Option<String>,
+    },
+    /// Toolbar buttons (icon, badge, which ones) may have changed.
+    ActionsChanged,
+    /// `tabs.create`: open a tab in the Space (the start page without a
+    /// URL), then report it with `extension_tab_opened(token, …)`.
+    OpenTab {
+        space: [u8; 16],
+        url: Option<String>,
+        active: bool,
+        token: u64,
+    },
+    Navigate {
+        tab: u64,
+        url: String,
+    },
+    Activate {
+        tab: u64,
+    },
+    Close {
+        tab: u64,
+    },
+    /// `windows.update({focused: true})`: bring the Space on screen.
+    FocusSpace {
+        space: [u8; 16],
+    },
+    /// An extension asks for more than it was granted. Reply `true` to
+    /// allow; dropping `reply` denies.
+    Prompt {
+        space: [u8; 16],
+        install: String,
+        name: String,
+        permissions: Vec<String>,
+        /// Match patterns, or the URLs of sites it asks for.
+        patterns: Vec<String>,
+        reply: Sender<bool>,
+    },
+    /// What an extension may use now, to be saved.
+    Granted {
+        install: String,
+        permissions: Vec<String>,
+        patterns: Vec<String>,
+    },
+}
+
+/// An extension as WebKit reads its manifest.
+#[derive(Clone, Debug, Default)]
+pub struct ExtensionManifest {
+    pub name: String,
+    pub version: String,
+    /// Permissions WebKit supports that the manifest requests.
+    pub permissions: Vec<String>,
+    /// Host match patterns it requests.
+    pub patterns: Vec<String>,
+    /// Manifest problems WebKit reported (it may still load).
+    pub problems: Vec<String>,
+}
+
+/// An enabled extension for a Space's controller, with what it was granted.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExtensionSpec {
+    pub install: String,
+    pub dir: std::path::PathBuf,
+    pub permissions: Vec<String>,
+    pub patterns: Vec<String>,
+}
+
+/// A toolbar button's state for the tab in front.
+#[derive(Clone)]
+pub struct ExtensionAction {
+    pub install: String,
+    pub label: String,
+    pub badge: String,
+    pub enabled: bool,
+    /// A PNG, 32 px square.
+    pub icon: Option<std::sync::Arc<[u8]>>,
+}
+
+/// A tab, as extensions see it.
+pub struct ExtensionTab<'a> {
+    pub id: u64,
+    pub page: Option<&'a Page>,
+    pub title: &'a str,
+    /// `None` for the start page.
+    pub url: Option<&'a str>,
+    pub loading: bool,
+}
+
+/// Loads a Space's enabled extensions (in toolbar order) and unloads the
+/// others. Its pages join its extension controller when they're created.
+pub fn set_extensions(
+    space: [u8; 16],
+    private: bool,
+    specs: Vec<ExtensionSpec>,
+    events: Sender<Event>,
+    cx: &App,
+) {
+    #[cfg(target_os = "macos")]
+    {
+        let mtm = objc2::MainThreadMarker::new().expect("Extensions run on the UI thread");
+        let shell = extensions::Shell {
+            events,
+            foreground: cx.foreground_executor().clone(),
+        };
+        let store = data_store(private, space, mtm);
+        extensions::set_extensions(space, private, &store, specs, shell, mtm);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (space, private, specs, events, cx);
+}
+
+/// Whether this system can run web extensions at all.
+pub fn extensions_available() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        extensions::available()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// Reads an unpacked extension for the install prompt.
+pub fn inspect_extension(
+    dir: &std::path::Path,
+) -> async_channel::Receiver<Result<ExtensionManifest, String>> {
+    #[cfg(target_os = "macos")]
+    {
+        let mtm = objc2::MainThreadMarker::new().expect("Extensions run on the UI thread");
+        extensions::inspect(dir, mtm)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = dir;
+        let (send, receive) = async_channel::bounded(1);
+        let _ = send.try_send(Err("Extensions need macOS.".into()));
+        receive
+    }
+}
+
+/// Describes a Space's tabs to its extensions; cheap when nothing changed.
+pub fn sync_extension_tabs<'a>(
+    space: [u8; 16],
+    tabs: impl Iterator<Item = ExtensionTab<'a>>,
+    active: Option<u64>,
+) {
+    #[cfg(target_os = "macos")]
+    {
+        use wry::WebViewExtMacOS;
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        let tabs = tabs
+            .map(|tab| extensions::TabSnapshot {
+                id: tab.id,
+                view: tab
+                    .page
+                    .map(|page| objc2::rc::Retained::into_super(page.raw.webview())),
+                title: tab.title.to_string(),
+                url: tab.url.map(str::to_string),
+                loading: tab.loading,
+            })
+            .collect();
+        extensions::sync_tabs(space, tabs, active, mtm);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (space, tabs.count(), active);
+}
+
+/// The shell opened (or couldn't open) the tab `ExtensionEvent::OpenTab`
+/// asked for.
+pub fn extension_tab_opened(token: u64, tab: Option<u64>) {
+    #[cfg(target_os = "macos")]
+    extensions::tab_opened(token, tab);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (token, tab);
+}
+
+/// Toolbar buttons for a Space's tab, in toolbar order.
+pub fn extension_actions(space: [u8; 16], tab: Option<u64>) -> Vec<ExtensionAction> {
+    #[cfg(target_os = "macos")]
+    {
+        extensions::actions(space, tab)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (space, tab);
+        Vec::new()
+    }
+}
+
+/// A click on an extension's toolbar button. `anchor` is the button in
+/// window coordinates, for its popup.
+pub fn perform_extension_action(
+    space: [u8; 16],
+    install: &str,
+    tab: Option<u64>,
+    anchor: Bounds<Pixels>,
+) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::{NSPoint, NSRect, NSSize};
+        let rect = NSRect::new(
+            NSPoint::new(f64::from(anchor.origin.x), f64::from(anchor.origin.y)),
+            NSSize::new(f64::from(anchor.size.width), f64::from(anchor.size.height)),
+        );
+        extensions::perform_action(space, install, tab, rect);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (space, install, tab, anchor);
+}
+
+/// Erases an extension's storage in a Space and stops it, before its files
+/// are removed.
+pub fn remove_extension(space: [u8; 16], install: &str) {
+    #[cfg(target_os = "macos")]
+    if let Some(mtm) = objc2::MainThreadMarker::new() {
+        extensions::remove(space, install, mtm);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (space, install);
+}
+
+/// A Space closed (the Private Space) or was deleted (`erase`): its
+/// extension controller goes, and with `erase` everything it stored.
+pub fn forget_extensions(space: [u8; 16], erase: bool) {
+    #[cfg(target_os = "macos")]
+    if let Some(mtm) = objc2::MainThreadMarker::new() {
+        extensions::forget(space, erase, mtm);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (space, erase);
 }
 
 /// Whether macOS can hand a link to another app, and which one.
@@ -1092,6 +1338,28 @@ pub fn remove_data_store(profile: [u8; 16], events: Sender<Event>) {
     let _ = (profile, events);
 }
 
+/// A Space's website data store: one throwaway store per Private Space, the
+/// Space's persistent store otherwise.
+#[cfg(target_os = "macos")]
+fn data_store(
+    private: bool,
+    profile: [u8; 16],
+    mtm: objc2::MainThreadMarker,
+) -> objc2::rc::Retained<objc2_web_kit::WKWebsiteDataStore> {
+    use objc2_foundation::NSUUID;
+    use objc2_web_kit::WKWebsiteDataStore;
+    if private {
+        PRIVATE_STORES.with_borrow_mut(|stores| {
+            stores
+                .entry(profile)
+                .or_insert_with(|| unsafe { WKWebsiteDataStore::nonPersistentDataStore(mtm) })
+                .clone()
+        })
+    } else {
+        unsafe { WKWebsiteDataStore::dataStoreForIdentifier(&NSUUID::from_bytes(profile), mtm) }
+    }
+}
+
 /// The page's WebKit configuration. Wry skips its own data-store setup when
 /// given one, so this applies the same rules: an ephemeral store for private
 /// tabs, the profile's persistent store otherwise. On top of that:
@@ -1104,27 +1372,19 @@ pub fn remove_data_store(profile: [u8; 16], events: Sender<Event>) {
 /// - element fullscreen (`requestFullscreen`, video players' fullscreen
 ///   buttons). WebKit moves the page into a fullscreen window of its own and
 ///   back into its host on exit; Wry turns this on too, but the page's
-///   configuration is Browser's to state.
+///   configuration is Browser's to state;
+/// - the Space's web extension controller (see `extensions.rs`).
 #[cfg(target_os = "macos")]
 fn page_configuration(
     private: bool,
     profile: [u8; 16],
 ) -> objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration> {
-    use objc2_foundation::{NSString, NSUUID};
-    use objc2_web_kit::{WKWebViewConfiguration, WKWebsiteDataStore};
+    use objc2_foundation::NSString;
+    use objc2_web_kit::WKWebViewConfiguration;
     let mtm = objc2::MainThreadMarker::new().expect("Pages are created on the UI thread");
     let config = unsafe { WKWebViewConfiguration::new(mtm) };
-    let store = if private {
-        PRIVATE_STORES.with_borrow_mut(|stores| {
-            stores
-                .entry(profile)
-                .or_insert_with(|| unsafe { WKWebsiteDataStore::nonPersistentDataStore(mtm) })
-                .clone()
-        })
-    } else {
-        unsafe { WKWebsiteDataStore::dataStoreForIdentifier(&NSUUID::from_bytes(profile), mtm) }
-    };
-    extensions::attach(&config, mtm);
+    let store = data_store(private, profile, mtm);
+    extensions::attach(&config, profile, private, &store, mtm);
     unsafe {
         config.setWebsiteDataStore(&store);
         config.preferences().setElementFullscreenEnabled(true);

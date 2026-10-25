@@ -74,6 +74,11 @@ fn responds(view: &WKWebView, selector: Sel) -> bool {
     unsafe { msg_send![view, respondsToSelector: selector] }
 }
 
+/// Whether a page is making sound (for extensions' `tabs.audible`).
+pub fn playing_audio(view: &WKWebView) -> bool {
+    responds(view, sel!(_isPlayingAudio)) && unsafe { msg_send![view, _isPlayingAudio] }
+}
+
 impl Media {
     pub fn install(view: Retained<WKWebView>, id: u64, events: Sender<Event>) -> Self {
         let supported = [
