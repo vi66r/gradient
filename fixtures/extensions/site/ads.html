@@ -1,0 +1,19 @@
+<!doctype html><meta charset=utf-8><title>pending</title>
+<h1>Ad fixture</h1>
+<div class="adsbygoogle" id="ad-slot" style="width:300px;height:250px;background:#fc0">AD SLOT</div>
+<p id=out></p>
+<script>
+const results = {};
+const finish = () => { document.title = JSON.stringify(results); document.getElementById('out').textContent = document.title; };
+const probe = (name, src) => new Promise(done => {
+  const s = document.createElement('script'); s.src = src;
+  s.onload = () => { results[name] = 'loaded'; done(); };
+  s.onerror = () => { results[name] = 'blocked'; done(); };
+  document.head.appendChild(s);
+});
+Promise.all([
+  probe('adsense', 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js'),
+  probe('analytics', 'https://www.google-analytics.com/analytics.js'),
+  probe('local', '/ads/ad.js'),
+]).then(() => setTimeout(() => { results.slotVisible = getComputedStyle(document.getElementById('ad-slot')).display !== 'none'; finish(); }, 1500));
+</script>

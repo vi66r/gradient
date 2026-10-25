@@ -30,6 +30,9 @@ pub fn scheme(scheme: &str) -> Scheme {
         _ if !valid => Scheme::Never,
         // Page machinery and local content.
         "about" | "blob" | "data" | "file" | "javascript" | "browser"
+        // Extension pages; WebKit serves them and enforces which pages may
+        // load them.
+        | "webkit-extension"
         // Script and system-settings handlers.
         | "applescript" | "help" | "x-man-page" | "itms-services"
         // Mounting network volumes or opening shells can leak credentials or
@@ -288,7 +291,16 @@ pub fn validate_url(url: &url::Url) -> Result<()> {
 }
 
 pub fn allowed_navigation(value: &str) -> bool {
-    value == "about:blank" || url::Url::parse(value).is_ok_and(|url| validate_url(&url).is_ok())
+    value == "about:blank"
+        || url::Url::parse(value).is_ok_and(|url| validate_url(&url).is_ok())
+        || is_extension_url(value)
+}
+
+/// An installed extension's own page (options, dashboards). WebKit serves
+/// these only to the extension and to pages its manifest exposes them to.
+pub fn is_extension_url(value: &str) -> bool {
+    url::Url::parse(value)
+        .is_ok_and(|url| url.scheme() == "webkit-extension" && url.host_str().is_some())
 }
 
 /// Addresses the shell may show, save and restore: web pages and local files.
@@ -502,6 +514,16 @@ mod tests {
     }
 
     #[test]
+    fn extension_pages_may_load_in_tabs() {
+        let page = "webkit-extension://3f2a9c1e-0b4d-4e8a-9f61-2c7d5b8e1a40/dashboard.html";
+        assert!(is_extension_url(page));
+        assert!(allowed_navigation(page));
+        assert!(allowed_address(page));
+        assert!(!is_extension_url("webkit-extension:///dashboard.html"));
+        assert!(!is_extension_url("https://example.com/"));
+    }
+
+    #[test]
     fn address_field_opens_local_files() {
         assert_eq!(
             destination("/Users/rafi/notes.html", DDG).unwrap(),
@@ -661,6 +683,7 @@ mod tests {
             "blob",
             "about",
             "browser",
+            "webkit-extension",
             "applescript",
             "x-apple.systempreferences",
             "x-apple-helpbasic",

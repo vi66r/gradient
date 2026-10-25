@@ -27,7 +27,8 @@ gpui::assets::icon_assets!(
         SkipBack,
         SkipForward,
         Download,
-        AppWindow
+        AppWindow,
+        Puzzle
     ]
 );
 
