@@ -100,6 +100,14 @@ struct Tab {
     /// Devices the user declined for the current document. Its later
     /// requests are denied quietly; the next document may ask again.
     declined: Vec<permissions::Kind>,
+    /// When the current document committed, so a background-only color
+    /// reported right after can wait for the painted one.
+    committed: Option<std::time::Instant>,
+    /// The new document is held out of sight until it first paints; then it
+    /// fades in as the strip and edge take its color. See `reveal`.
+    fade_pending: bool,
+    /// A color reported while the page was held, applied when it shows.
+    pending_tint: Option<Option<u32>>,
 }
 
 impl Tab {
@@ -126,6 +134,9 @@ impl Tab {
             zoom: 1.,
             opener: None,
             declined: Vec::new(),
+            committed: None,
+            fade_pending: false,
+            pending_tint: None,
         }
     }
 }
@@ -1435,28 +1446,75 @@ impl Browser {
     /// WebKit reports its default white for a moment after each commit, before
     /// the page's own background arrives; apply only colors that hold briefly
     /// so the strip doesn't flash on dark sites.
-    fn settle_tint(&mut self, id: u64, tint: Option<u32>, cx: &mut Context<Self>) {
+    fn settle_tint(&mut self, id: u64, tint: Option<u32>, definite: bool, cx: &mut Context<Self>) {
+        /// How long after a commit a background-only color waits for the
+        /// page's painted one, so the strip doesn't go old → white → dark.
+        const PAINT_GRACE: Duration = Duration::from_millis(600);
         let Some(tab) = self.tab_mut(id) else {
             return;
         };
         tab.tint_epoch = tab.tint_epoch.wrapping_add(1);
         let epoch = tab.tint_epoch;
+        // One frame: WebKit reports its colors in a burst, and waiting
+        // longer would leave the strip behind the page.
+        let mut wait = Duration::from_millis(16);
+        if !definite && let Some(committed) = tab.committed {
+            wait = wait.max(PAINT_GRACE.saturating_sub(committed.elapsed()));
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(tab) = this.tab_mut(id).filter(|tab| tab.tint_epoch == epoch) else {
+                    return;
+                };
+                // A held page shows its color when it shows itself.
+                if tab.fade_pending {
+                    tab.pending_tint = Some(tint);
+                    return;
+                }
+                this.apply_tint(id, tint, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn apply_tint(&mut self, id: u64, tint: Option<u32>, cx: &mut Context<Self>) {
+        let dark = self.dark;
+        if let Some(tab) = self.tab_mut(id)
+            && !ui::same_color(tab.tint, tint)
+        {
+            tab.tint = tint;
+            if let Some(page) = &tab.page {
+                page.set_edge_color(ui::strip_color(tint, dark));
+            }
+            cx.notify();
+        }
+    }
+
+    /// A held page painted: it fades in while the strip and the edge under it
+    /// take its color, all at once, at one speed.
+    fn reveal(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(tab) = self.tab_mut(id).filter(|tab| tab.fade_pending) else {
+            return;
+        };
+        tab.fade_pending = false;
+        let tint = tab.pending_tint.take();
+        if let Some(page) = &tab.page {
+            page.fade_in();
+        }
+        if let Some(tint) = tint {
+            self.apply_tint(id, tint, cx);
+        }
+        cx.notify();
+    }
+
+    /// A page that never reports its first paint still shows, after a beat.
+    fn fade_in_late(&mut self, id: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor()
-                .timer(Duration::from_millis(60))
+                .timer(Duration::from_millis(650))
                 .await;
-            let _ = this.update(cx, |this, cx| {
-                let dark = this.dark;
-                if let Some(tab) = this.tab_mut(id)
-                    && tab.tint_epoch == epoch
-                {
-                    tab.tint = tint;
-                    if let Some(page) = &tab.page {
-                        page.set_edge_color(ui::strip_color(tint, dark));
-                    }
-                    cx.notify();
-                }
-            });
+            let _ = this.update(cx, |this, cx| this.reveal(id, cx));
         })
         .detach();
     }
@@ -1575,7 +1633,8 @@ impl Browser {
             }
             engine::Event::Snapshot { id, image } => self.page_snapshot(id, image),
             engine::Event::MediaChanged(id) => self.media_changed(id, cx),
-            engine::Event::PageTint(id, tint) => self.settle_tint(id, tint, cx),
+            engine::Event::PageTint(id, tint, definite) => self.settle_tint(id, tint, definite, cx),
+            engine::Event::Painted(id) => self.reveal(id, cx),
             engine::Event::Committed(id) => {
                 self.follow_site_zoom(id);
                 self.record_visit(id);
@@ -1587,18 +1646,28 @@ impl Browser {
                         page.end_find();
                     }
                 }
+                let fade = !cx.reduce_motion();
                 if let Some(tab) = self.tab_mut(id) {
                     tab.declined.clear();
-                }
-                if let Some(page) = self
-                    .all_tabs()
-                    .find(|tab| tab.id == id)
-                    .and_then(|tab| tab.page.as_ref())
-                {
-                    page.reset_theme();
-                    if !cx.reduce_motion() {
-                        page.fade_in();
+                    tab.committed = Some(std::time::Instant::now());
+                    // Held out of sight, over the host painted in the old
+                    // color, until WebKit presents it; then it fades in as the
+                    // strip, the edge and the host take its color.
+                    tab.fade_pending = fade;
+                    tab.pending_tint = None;
+                    if let Some(page) = &tab.page {
+                        page.reset_theme();
+                        if fade {
+                            page.hold();
+                        }
                     }
+                }
+                if fade {
+                    // Native layer changes reach the screen with the shell's
+                    // next frame (Metal presents in step with Core Animation),
+                    // so ask for one now, before WebKit shows its blank page.
+                    cx.notify();
+                    self.fade_in_late(id, cx);
                 }
             }
             engine::Event::FindMatches { id, query, matches } => {

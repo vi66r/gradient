@@ -69,11 +69,11 @@ define_class!(
 impl Observer {
     fn report(&self) {
         if let Some(view) = self.ivars().view.load() {
-            let color = current(&view, self.ivars().sampled.get());
+            let (color, definite) = current(&view, self.ivars().sampled.get());
             let _ = self
                 .ivars()
                 .events
-                .try_send(Event::PageTint(self.ivars().id, color));
+                .try_send(Event::PageTint(self.ivars().id, color, definite));
         }
     }
 }
@@ -209,9 +209,12 @@ impl Drop for Theme {
     }
 }
 
-fn current(view: &WKWebView, own: Option<u32>) -> Option<u32> {
+/// The page's color, and whether it is definite: painted at the top or
+/// declared opaque, rather than only the document background, which a page
+/// shows before it paints its own colors.
+fn current(view: &WKWebView, own: Option<u32>) -> (Option<u32>, bool) {
     if own.is_some() {
-        return own;
+        return (own, true);
     }
     let sampled: Option<Retained<NSColor>> = unsafe {
         let available: bool =
@@ -224,11 +227,10 @@ fn current(view: &WKWebView, own: Option<u32>) -> Option<u32> {
     };
     let theme = unsafe { view.themeColor() };
     let under = unsafe { view.underPageBackgroundColor() };
-    pick(
-        srgb(sampled.as_deref()),
-        srgb(theme.as_deref()),
-        srgb(Some(&under)),
-    )
+    let (sampled, theme) = (srgb(sampled.as_deref()), srgb(theme.as_deref()));
+    let opaque = |color: Option<(u32, f64)>| color.is_some_and(|(_, alpha)| alpha >= 0.999);
+    let definite = opaque(sampled) || opaque(theme);
+    (pick(sampled, theme, srgb(Some(&under))), definite)
 }
 
 /// `0xRRGGBB` and alpha in sRGB.

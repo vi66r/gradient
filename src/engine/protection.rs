@@ -330,6 +330,17 @@ define_class!(
         #[unsafe(method(webView:didCommitNavigation:))]
         unsafe fn committed(&self, view: &WKWebView, navigation: Option<&WKNavigation>) {
             let _ = self.ivars().events.try_send(Event::Committed(self.ivars().id));
+            // WebKit SPI, as Safari uses: once the new document's first layer
+            // update is on screen, the shell fades it in.
+            let presented = objc2::sel!(_doAfterNextPresentationUpdate:);
+            let responds: bool = unsafe { msg_send![view, respondsToSelector: presented] };
+            if responds {
+                let (events, id) = (self.ivars().events.clone(), self.ivars().id);
+                let done = block2::RcBlock::new(move || {
+                    let _ = events.try_send(Event::Painted(id));
+                });
+                let _: () = unsafe { msg_send![view, _doAfterNextPresentationUpdate: &*done] };
+            }
             self.ivars().approved.borrow_mut().take();
             self.ivars().declined.borrow_mut().clear();
             unsafe { self.ivars().original.webView_didCommitNavigation(view, navigation); }

@@ -80,6 +80,9 @@ const R_LIST: f32 = 14.;
 /// Matches the native page's edge dissolve (engine/fade.rs).
 const EDGE_FADE: f32 = 14.;
 const FAST: Duration = Duration::from_millis(140);
+/// The strip's color change; the page's fade-in and the edge dissolve under
+/// the strip use the same duration and curve (`engine::fade::MOTION`).
+const STRIP: Duration = Duration::from_millis(240);
 const NORMAL: Duration = Duration::from_millis(200);
 
 fn hsla(color: u32) -> Hsla {
@@ -1425,17 +1428,19 @@ impl Browser {
             .items_center()
             .gap_0p5()
             // Eased with the page's fade-in, so a new site arrives as one.
+            // Keyed by tab: switching tabs swaps the page at once, and the
+            // strip lands with it instead of trailing over from the last tab.
             .bg(Hsla::from(motion::transition(
-                "strip-background",
+                format!("strip-background-{}", tab.id),
                 Rgb::from(background),
-                Transition::new(NORMAL),
+                Transition::new(STRIP),
                 window,
                 cx,
             )))
             .text_color(motion::transition(
-                "strip-ink",
+                format!("strip-ink-{}", tab.id),
                 Rgb::from(ink),
-                Transition::new(NORMAL),
+                Transition::new(STRIP),
                 window,
                 cx,
             ))
@@ -2278,6 +2283,17 @@ impl From<Rgb> for Hsla {
 }
 
 /// The control strip's color for a page: its own tint, else the panel color.
+/// Whether two page colors look the same. Later samples of a page often
+/// differ by a step or two; moving the strip for that reads as a twitch.
+pub(crate) fn same_color(a: Option<u32>, b: Option<u32>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => [16, 8, 0]
+            .iter()
+            .all(|shift| ((a >> shift) & 0xff).abs_diff((b >> shift) & 0xff) <= 4),
+        (a, b) => a == b,
+    }
+}
+
 pub(crate) fn strip_color(tint: Option<u32>, dark: bool) -> u32 {
     tint.unwrap_or(palette(dark).card)
 }
@@ -2422,6 +2438,14 @@ mod tests {
         assert_eq!(label(Some(4), None), "4 matches");
         assert_eq!(label(Some(1), None), "1 match");
         assert_eq!(label(None, None), "1000+ matches");
+    }
+
+    #[core::prelude::v1::test]
+    fn tiny_sampling_differences_do_not_move_the_strip() {
+        assert!(same_color(Some(0x1f1f1f), Some(0x1e2021)));
+        assert!(!same_color(Some(0x1f1f1f), Some(0x2a2a2a)));
+        assert!(same_color(None, None));
+        assert!(!same_color(None, Some(0xffffff)));
     }
 
     #[core::prelude::v1::test]

@@ -12,7 +12,11 @@ pub enum Event {
     /// A new main-frame document committed (not same-document navigation).
     Committed(u64),
     /// The page's own color (`0xRRGGBB`), for the control zone above it.
-    PageTint(u64, Option<u32>),
+    /// A page's color for the strip; `true` when it is definite (painted or
+    /// declared), not just the document background.
+    PageTint(u64, Option<u32>, bool),
+    /// A new document's first visually non-empty layout.
+    Painted(u64),
     /// Find-in-page matches for `query` in a page.
     FindMatches {
         id: u64,
@@ -997,7 +1001,10 @@ impl Page {
         {
             self.edge_color.set(color);
             if let Some(edge) = self.edge.borrow().as_ref() {
-                edge.set_color(color);
+                edge.set_color(color, true);
+            }
+            if let Some(host) = self.host.borrow().as_ref() {
+                fade::set_backdrop(&host.0, color, true);
             }
         }
         #[cfg(not(target_os = "macos"))]
@@ -1017,6 +1024,17 @@ impl Page {
     }
 
     /// Fades a newly committed document in.
+    /// A new document committed: hold the page out of sight until
+    /// `fade_in`; the host's color (the strip's) stands in.
+    pub fn hold(&self) {
+        #[cfg(target_os = "macos")]
+        {
+            use wry::WebViewExtMacOS;
+            fade::hold(&self.raw.webview());
+        }
+    }
+
+    /// Fades a held page in, in step with the strip.
     pub fn fade_in(&self) {
         #[cfg(target_os = "macos")]
         {
@@ -1601,6 +1619,7 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
             // Above the page, so it dissolves into the control strip.
             *page.edge.borrow_mut() =
                 Some(fade::EdgeFade::attach(&host, mtm, page.edge_color.get()));
+            fade::set_backdrop(&host, page.edge_color.get(), false);
             *page.host.borrow_mut() = Some(NativeHost(host));
         }
         if let Some(host) = page.host.borrow().as_ref() {
