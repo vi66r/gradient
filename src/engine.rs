@@ -86,6 +86,12 @@ pub enum Event {
     /// a script opened, or one with no history).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Closed(u64),
+    /// A picture of a page as it was just now (`Page::snapshot`), or `None`
+    /// if WebKit couldn't take one.
+    Snapshot {
+        id: u64,
+        image: Option<std::sync::Arc<gpui::RenderImage>>,
+    },
     Title(u64, String),
     Loading(u64, bool, String),
     #[cfg_attr(target_os = "macos", allow(dead_code))]
@@ -783,6 +789,18 @@ impl Page {
         }
     }
 
+    /// Pictures the page as it is now, for the shell to show in its place
+    /// while something draws over it; arrives as `Event::Snapshot`.
+    pub fn snapshot(&self, id: u64, events: Sender<Event>) {
+        #[cfg(target_os = "macos")]
+        {
+            use wry::WebViewExtMacOS;
+            snapshot::take(&self.raw.webview(), id, events);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = events.try_send(Event::Snapshot { id, image: None });
+    }
+
     /// Scales the page's content (CSS zoom), not just its rendering.
     pub fn set_zoom(&self, zoom: f64) {
         let _ = self.raw.zoom(zoom);
@@ -1397,6 +1415,8 @@ mod fade;
 mod find;
 #[cfg(target_os = "macos")]
 mod media;
+#[cfg(target_os = "macos")]
+mod snapshot;
 #[cfg(target_os = "macos")]
 mod theme;
 #[cfg(target_os = "macos")]

@@ -75,6 +75,10 @@ const R_BUTTON: f32 = 10.;
 const MEDIA_STRIP: f32 = 30.;
 /// The find bar's width when open; it eases open from nothing.
 const FIND_BAR: f32 = 264.;
+/// The suggestions list's radius: the pill's curve, a step tighter.
+const R_LIST: f32 = 14.;
+/// Matches the native page's edge dissolve (engine/fade.rs).
+const EDGE_FADE: f32 = 14.;
 const FAST: Duration = Duration::from_millis(140);
 const NORMAL: Duration = Duration::from_millis(200);
 
@@ -1109,9 +1113,29 @@ impl Browser {
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(self.dark);
+        let reveal = motion::transition(
+            "suggestions",
+            if self.suggest.shown() { 1. } else { 0. },
+            Transition::new(FAST),
+            window,
+            cx,
+        );
+        // Once the list has faded out, the live page takes its picture's place.
+        if !self.suggest.open && reveal < 0.01 {
+            self.suggest.cover = suggest::Cover::None;
+        }
         let tab = &self.tabs[self.active];
+        let covered = match &self.suggest.cover {
+            suggest::Cover::Ready(id, image) if *id == tab.id && !self.lab => Some(image.clone()),
+            _ => None,
+        };
         let (content, key): (AnyElement, SharedString) = if self.lab {
             (self.request_lab(cx), "lab".into())
+        } else if let Some(image) = covered {
+            (
+                self.page_picture(image, reveal, cx),
+                format!("page-{}", tab.id).into(),
+            )
         } else if let Some(page) = &tab.page {
             let page = page.clone();
             (
@@ -1197,6 +1221,11 @@ impl Render for Browser {
                     }
                     if this.find.read(cx).focus_handle(cx).is_focused(w) {
                         this.close_find(w, cx);
+                    } else if this.address_focused(w, cx) && this.suggest.open {
+                        // First Esc closes the list; the next leaves the field.
+                        this.drop_completion(w, cx);
+                        this.close_suggestions();
+                        cx.notify();
                     } else if this.address_focused(w, cx) {
                         this.release_address(w, cx);
                     } else {
@@ -1234,6 +1263,10 @@ impl Render for Browser {
             .on_action(cx.listener(|this, _: &Quit, w, cx| {
                 this.request_discard(lifecycle::Discard::Quit, w, cx);
             }))
+            .on_action(cx.listener(|this, _: &ClearHistory, w, cx| this.clear_history(w, cx)))
+            .on_action(cx.listener(|this, action: &SetSearchEngine, _, cx| {
+                this.set_search_engine(action.engine, cx)
+            }))
             .child(self.sidebar(window, cx))
             .child(
                 div().flex_1().min_w_0().h_full().child(
@@ -1249,6 +1282,7 @@ impl Render for Browser {
                         .shadow(panel_shadow(self.dark))
                         .child(self.control_zone(p, window, cx))
                         .child(body)
+                        .children(self.suggestion_list(p, reveal, cx))
                         .when_some(self.notice.clone(), |d, message| {
                             d.child(
                                 div()
@@ -1314,6 +1348,16 @@ fn panel_shadow(dark: bool) -> Vec<BoxShadow> {
 }
 
 impl Browser {
+    /// The control strip's color, its ink, and whether that ink is light: the
+    /// page's own color when it has one.
+    fn strip_look(&self, p: Palette) -> (u32, u32, bool) {
+        let tab = &self.tabs[self.active];
+        let tint = tab.tint.filter(|_| !self.lab && tab.page.is_some());
+        let ink = tint.map(readable_on).unwrap_or(p.ink);
+        let over_dark = ink == 0xf2f3f5 || (tint.is_none() && self.dark);
+        (tint.unwrap_or(p.card), ink, over_dark)
+    }
+
     /// The page's own top bar: navigation, a borderless address and page
     /// actions on a strip tinted with the page's color. Empty space drags the
     /// window (double-click zooms); controls keep their clicks to themselves.
@@ -1324,10 +1368,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let tab = &self.tabs[self.active];
-        let tint = tab.tint.filter(|_| !self.lab && tab.page.is_some());
-        let background = tint.unwrap_or(p.card);
-        let ink = tint.map(readable_on).unwrap_or(p.ink);
-        let over_dark = ink == 0xf2f3f5 || (tint.is_none() && self.dark);
+        let (background, ink, over_dark) = self.strip_look(p);
         // The theme's caret is a fixed primary that can vanish on a page's
         // color; the strip's ink always reads. Request Lab's fields sit on
         // the palette, where the untinted ink is the palette's own.
@@ -1604,8 +1645,32 @@ impl Browser {
             .items_center()
             .opacity(0.3 + 0.7 * presence);
         if editing {
+            let bounds = self.address_bounds.clone();
             return field
+                .relative()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                // ↑ and ↓ move through the suggestions instead of the text.
+                .capture_action(
+                    cx.listener(|this, _: &gpui::component::input::MoveUp, w, cx| {
+                        if this.suggest.open {
+                            this.move_suggestion(false, w, cx);
+                            cx.stop_propagation();
+                        }
+                    }),
+                )
+                .capture_action(
+                    cx.listener(|this, _: &gpui::component::input::MoveDown, w, cx| {
+                        if this.suggest.open {
+                            this.move_suggestion(true, w, cx);
+                            cx.stop_propagation();
+                        }
+                    }),
+                )
+                .child(
+                    canvas(move |area, _, _| bounds.set(area), |_, _, _, _| {})
+                        .absolute()
+                        .size_full(),
+                )
                 .child(
                     content.child(
                         Input::new(&self.address)
@@ -1691,6 +1756,224 @@ impl Browser {
     }
 }
 
+impl Browser {
+    /// The page's picture while the suggestions cover it (`suggest::Cover`),
+    /// finished as the live page is: the strip's edge dissolve on top and the
+    /// panel's rounded corner. A faint veil sets the list above it. Clicking
+    /// it puts the list away and hands focus back to the page.
+    fn page_picture(
+        &self,
+        image: Option<Arc<RenderImage>>,
+        reveal: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let edge = hsla(strip_color(self.tabs[self.active].tint, self.dark));
+        let radius = px(CARD_RADIUS - 1.);
+        let veil = if self.dark { 0.14 } else { 0.035 };
+        div()
+            .id("page-picture")
+            .size_full()
+            .relative()
+            .overflow_hidden()
+            .rounded_bl(radius)
+            .children(image.map(|image| img(image).size_full().rounded_bl(radius)))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(EDGE_FADE))
+                    .bg(linear_gradient(
+                        180.,
+                        linear_color_stop(edge, 0.),
+                        linear_color_stop(edge.opacity(0.), 1.),
+                    )),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .size_full()
+                    .rounded_bl(radius)
+                    .bg(black(veil * reveal)),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.release_address(window, cx);
+                }),
+            )
+            .into_any_element()
+    }
+
+    /// The suggestions, hung just below the address pill and as wide: the
+    /// pill's glass made solid on the strip's color, with a soft lift. It
+    /// eases in and out with a small drop, over the page's picture.
+    fn suggestion_list(
+        &self,
+        p: Palette,
+        reveal: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if reveal < 0.01 || self.suggest.rows.is_empty() {
+            return None;
+        }
+        let anchor = self.address_bounds.get();
+        let (background, ink, over_dark) = self.strip_look(p);
+        let glass = Glass { over_dark };
+        let terms = suggest::terms(&self.suggest.typed);
+        let (wash, hover) = if over_dark {
+            (white(0.11), white(0.06))
+        } else {
+            (black(0.06), black(0.035))
+        };
+        let rows = self
+            .suggest
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| self.suggestion_row(index, row, &terms, wash, hover, cx));
+        let list = div()
+            .id("suggestions")
+            .occlude()
+            .w(anchor.size.width)
+            .p(px(4.))
+            .flex()
+            .flex_col()
+            .rounded(px(R_LIST))
+            .bg(glass.solid(background))
+            .border_1()
+            .border_color(glass.edge(1.))
+            .shadow(glass.drop_shadow(reveal))
+            .text_color(rgb(ink))
+            .text_size(px(13.))
+            .opacity(reveal)
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .children(rows);
+        let at = point(anchor.left(), anchor.bottom() + px(6. - 4. * (1. - reveal)));
+        Some(deferred(anchored().position(at).child(list)).into_any_element())
+    }
+
+    fn suggestion_row(
+        &self,
+        index: usize,
+        row: &suggest::Row,
+        terms: &[String],
+        wash: Hsla,
+        hover: Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        use suggest::Look;
+        let selected = index == self.suggest.selected;
+        // Private pages never show site icons.
+        let site_icon = row
+            .url
+            .as_deref()
+            .filter(|_| !self.current_space().private)
+            .and_then(favicon::host_key)
+            .and_then(|key| self.icons.get(&key))
+            .map(|(image, _)| image.clone());
+        let icon = match site_icon {
+            Some(image) => img(image)
+                .size(px(16.))
+                .flex_shrink_0()
+                .rounded(px(4.))
+                .into_any_element(),
+            None => Icon::new(match row.look {
+                Look::Search => IconName::Search,
+                Look::Tab => IconName::AppWindow,
+                Look::Page | Look::Address => IconName::Globe,
+            })
+            .size_4()
+            .flex_shrink_0()
+            .opacity(0.6)
+            .into_any_element(),
+        };
+        // Matches stand out in pages and tabs; a search or address row is
+        // the typed text itself.
+        let matched = matches!(row.look, Look::Page | Look::Tab);
+        let text = |text: &str| emphasized(text, if matched { terms } else { &[] });
+        div()
+            .id(("suggestion", index))
+            .h(px(34.))
+            .px_2p5()
+            .flex()
+            .items_center()
+            .gap_2p5()
+            .rounded(px(R_LIST - 4.))
+            .cursor_pointer()
+            .when(selected, |row| row.bg(wash))
+            .when(!selected, |row| row.hover(move |style| style.bg(hover)))
+            .child(icon)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .max_w(relative(0.7))
+                            .truncate()
+                            .child(text(&row.title)),
+                    )
+                    .when(!row.detail.is_empty(), |line| {
+                        line.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(12.))
+                                .opacity(0.55)
+                                .child(text(&row.detail)),
+                        )
+                    }),
+            )
+            .when(row.look == Look::Tab, |line| {
+                line.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(11.5))
+                        .opacity(if selected { 0.7 } else { 0.5 })
+                        .child("Switch to Tab"),
+                )
+            })
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.choose_suggestion(index, window, cx)),
+            )
+    }
+}
+
+/// `text` with each of `terms` (lowercase) set a weight heavier where it
+/// matched (see `suggest::find_term`).
+fn emphasized(text: &str, terms: &[String]) -> StyledText {
+    let lower = text.to_ascii_lowercase();
+    let mut ranges: Vec<std::ops::Range<usize>> = terms
+        .iter()
+        .filter_map(|term| {
+            let start = suggest::find_term(&lower, term)?;
+            Some(start..start + term.len())
+        })
+        .filter(|range| text.is_char_boundary(range.start) && text.is_char_boundary(range.end))
+        .collect();
+    ranges.sort_by_key(|range| range.start);
+    let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    let bold = HighlightStyle {
+        font_weight: Some(FontWeight::SEMIBOLD),
+        ..Default::default()
+    };
+    StyledText::new(text.to_string()).with_highlights(merged.into_iter().map(|range| (range, bold)))
+}
+
 /// Translucent layers for the address pill, tuned to the strip beneath it:
 /// white glass over dark strips, frosted white over light ones. `lift` runs
 /// 0 (resting: nothing visible) to 1 (editing).
@@ -1710,6 +1993,26 @@ impl Glass {
         } else {
             black(0.08 * lift)
         }
+    }
+
+    /// The glass as one opaque color over `under`, for surfaces that leave
+    /// the strip (the suggestions list).
+    fn solid(self, under: u32) -> Hsla {
+        let alpha = if self.over_dark { 0.12 } else { 0.72 };
+        motion::Interpolate::interpolate(&Rgb::from(under), &Rgb::from(0xffffff), alpha).into()
+    }
+
+    /// A softer, deeper lift than the pill's, for a surface over the page.
+    fn drop_shadow(self, lift: f32) -> Vec<BoxShadow> {
+        let depth = if self.over_dark { 1. } else { 0.5 };
+        let layer = |alpha: f32, y: f32, blur: f32| BoxShadow {
+            color: black(alpha * depth * lift),
+            offset: point(px(0.), px(y)),
+            blur_radius: px(blur),
+            spread_radius: px(0.),
+            inset: false,
+        };
+        vec![layer(0.12, 1., 3.), layer(0.2, 12., 32.)]
     }
 
     fn shadow(self, lift: f32) -> Vec<BoxShadow> {
