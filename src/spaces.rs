@@ -1,6 +1,6 @@
 //! Spaces: sandboxed sets of tabs. Each Space has its own WebKit data store
-//! (cookies, site storage, sign-ins), tabs, recently closed tabs and color,
-//! and one window shows one Space at a time. The Private Space is built in:
+//! (cookies, site storage, sign-ins), tabs, recently closed tabs, history
+//! and color, and one window shows one Space at a time. The Private Space is built in:
 //! its pages share one throwaway store, it is never saved, and it exists only
 //! while it has tabs.
 //!
@@ -16,7 +16,8 @@ use gpui::{Action, App, Context, Pixels, Point, PromptLevel, Window};
 use std::mem::take;
 
 pub(crate) struct Space {
-    /// Names the Space's WebKit data store; also keys its site permissions.
+    /// Names the Space's WebKit data store; also keys its site permissions
+    /// and history.
     pub id: [u8; 16],
     pub name: String,
     pub color: u8,
@@ -489,7 +490,7 @@ impl Browser {
             count => format!("Its {count} tabs close"),
         };
         let detail = format!(
-            "{tabs}, and the website data it keeps (cookies, sign-ins and site storage) is erased. This can’t be undone."
+            "{tabs}, and the website data it keeps (cookies, sign-ins and site storage) and its history are erased. This can’t be undone."
         );
         let answer = window.prompt(
             PromptLevel::Warning,
@@ -544,6 +545,9 @@ impl Browser {
         self.prune_downloads();
         if let Err(error) = self.permissions.forget_profile(&id) {
             self.notice = Some(error.to_string());
+        }
+        if let Err(error) = self.history.forget_space(id) {
+            self.notice = Some(format!("The Space’s history couldn’t be erased: {error}"));
         }
         engine::set_notification_sites(self.notification_sites());
         let events = self.events.clone();

@@ -51,12 +51,61 @@ pub enum Entry {
     App(url::Url),
 }
 
+/// Where address-field searches go. A menu chooses it for now; see
+/// `settings.rs`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchEngine {
+    #[default]
+    DuckDuckGo,
+    Google,
+    Kagi,
+    Bing,
+    Brave,
+}
+
+impl SearchEngine {
+    pub const ALL: [Self; 5] = [
+        Self::DuckDuckGo,
+        Self::Google,
+        Self::Kagi,
+        Self::Bing,
+        Self::Brave,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::DuckDuckGo => "DuckDuckGo",
+            Self::Google => "Google",
+            Self::Kagi => "Kagi",
+            Self::Bing => "Bing",
+            Self::Brave => "Brave Search",
+        }
+    }
+
+    fn base(self) -> &'static str {
+        match self {
+            Self::DuckDuckGo => "https://duckduckgo.com/",
+            Self::Google => "https://www.google.com/search",
+            Self::Kagi => "https://kagi.com/search",
+            Self::Bing => "https://www.bing.com/search",
+            Self::Brave => "https://search.brave.com/search",
+        }
+    }
+
+    pub fn search(self, query: &str) -> String {
+        let mut url = url::Url::parse(self.base()).expect("search engine addresses are valid");
+        url.query_pairs_mut().append_pair("q", query);
+        url.into()
+    }
+}
+
 /// Address-field input: app links (`mailto:a@b.com`, `tel:+1555…`) are offered
 /// to another app; everything else follows [`destination`], including search.
-pub fn entry(input: &str) -> Result<Entry> {
+pub fn entry(input: &str, engine: SearchEngine) -> Result<Entry> {
     match app_link(input) {
         Some(url) => Ok(Entry::App(url)),
-        None => destination(input).map(Entry::Web),
+        None => destination(input, engine).map(Entry::Web),
     }
 }
 
@@ -85,7 +134,7 @@ fn is_port(value: &str) -> bool {
 /// Network navigation, local files the user names, and our own start screen
 /// are accepted. Pasting JavaScript, data URLs, or credentials must not execute
 /// code or persist a password in the session snapshot.
-pub fn destination(input: &str) -> Result<String> {
+pub fn destination(input: &str, engine: SearchEngine) -> Result<String> {
     let input = input.trim();
     if input.is_empty() || input == START {
         return Ok(START.into());
@@ -101,7 +150,7 @@ pub fn destination(input: &str) -> Result<String> {
     }
     // Relative paths can't name a file without a working directory.
     if input.starts_with("./") || input.starts_with("../") {
-        return search(input);
+        return Ok(engine.search(input));
     }
     let network = lower.starts_with("http://") || lower.starts_with("https://");
     if input.contains("://")
@@ -136,13 +185,7 @@ pub fn destination(input: &str) -> Result<String> {
         validate_url(&url)?;
         return Ok(url.to_string());
     }
-    search(input)
-}
-
-fn search(input: &str) -> Result<String> {
-    let mut search = url::Url::parse("https://duckduckgo.com/")?;
-    search.query_pairs_mut().append_pair("q", input);
-    Ok(search.into())
+    Ok(engine.search(input))
 }
 
 /// An absolute path (`/Users/…`) or a home-relative one (`~/…`), taken
@@ -397,23 +440,52 @@ impl Session {
 mod tests {
     use super::*;
 
+    const DDG: SearchEngine = SearchEngine::DuckDuckGo;
+
     #[test]
     fn navigation_handles_search_domains_and_local_development() {
         assert_eq!(
-            destination(" example.com/a ").unwrap(),
+            destination(" example.com/a ", DDG).unwrap(),
             "https://example.com/a"
         );
         assert_eq!(
-            destination("localhost:5173/test").unwrap(),
+            destination("localhost:5173/test", DDG).unwrap(),
             "http://localhost:5173/test"
         );
         assert_eq!(
-            destination("127.0.0.1:8000").unwrap(),
+            destination("127.0.0.1:8000", DDG).unwrap(),
             "http://127.0.0.1:8000/"
         );
-        assert_eq!(destination("[::1]:8080").unwrap(), "http://[::1]:8080/");
-        let search = url::Url::parse(&destination("3D tools & things").unwrap()).unwrap();
+        assert_eq!(
+            destination("[::1]:8080", DDG).unwrap(),
+            "http://[::1]:8080/"
+        );
+        let search = url::Url::parse(&destination("3D tools & things", DDG).unwrap()).unwrap();
         assert_eq!(search.query_pairs().next().unwrap().1, "3D tools & things");
+    }
+
+    #[test]
+    fn searches_go_to_the_chosen_engine() {
+        for engine in SearchEngine::ALL {
+            let url = url::Url::parse(&destination("rust & gpui", engine).unwrap()).unwrap();
+            let query = url.query_pairs().find(|(key, _)| key == "q").unwrap().1;
+            assert_eq!(query, "rust & gpui", "{engine:?}");
+        }
+        assert!(
+            destination("hello", SearchEngine::Kagi)
+                .unwrap()
+                .starts_with("https://kagi.com/search?q=")
+        );
+        assert!(
+            destination("hello", SearchEngine::Google)
+                .unwrap()
+                .starts_with("https://www.google.com/search?q=")
+        );
+        // Addresses don't depend on the engine.
+        assert_eq!(
+            destination("example.com", SearchEngine::Bing).unwrap(),
+            "https://example.com/"
+        );
     }
 
     #[test]
@@ -424,7 +496,7 @@ mod tests {
             "https://user:secret@example.com",
             "ftp://example.com",
         ] {
-            assert!(destination(input).is_err(), "accepted {input}");
+            assert!(destination(input, DDG).is_err(), "accepted {input}");
             assert!(!allowed_navigation(input));
         }
     }
@@ -432,29 +504,29 @@ mod tests {
     #[test]
     fn address_field_opens_local_files() {
         assert_eq!(
-            destination("/Users/rafi/notes.html").unwrap(),
+            destination("/Users/rafi/notes.html", DDG).unwrap(),
             "file:///Users/rafi/notes.html"
         );
         // Literal paths: spaces and percent signs are part of the name.
         assert_eq!(
-            destination(" /tmp/My Report 100%.pdf ").unwrap(),
+            destination(" /tmp/My Report 100%.pdf ", DDG).unwrap(),
             "file:///tmp/My%20Report%20100%25.pdf"
         );
         assert_eq!(
-            destination("file:///tmp/My%20Report.pdf").unwrap(),
+            destination("file:///tmp/My%20Report.pdf", DDG).unwrap(),
             "file:///tmp/My%20Report.pdf"
         );
         assert_eq!(
-            destination("file://localhost/tmp/a.html#top").unwrap(),
+            destination("file://localhost/tmp/a.html#top", DDG).unwrap(),
             "file:///tmp/a.html#top"
         );
         assert_eq!(
-            destination("FILE:///tmp/a.txt").unwrap(),
+            destination("FILE:///tmp/a.txt", DDG).unwrap(),
             "file:///tmp/a.txt"
         );
         let home = std::env::var("HOME").unwrap();
         assert_eq!(
-            destination("~/Desktop/a.png").unwrap(),
+            destination("~/Desktop/a.png", DDG).unwrap(),
             url::Url::from_file_path(format!("{home}/Desktop/a.png"))
                 .unwrap()
                 .as_str()
@@ -477,7 +549,7 @@ mod tests {
             "notes",
             "my file.html",
         ] {
-            let url = url::Url::parse(&destination(input).unwrap()).unwrap();
+            let url = url::Url::parse(&destination(input, DDG).unwrap()).unwrap();
             assert_eq!(url.host_str(), Some("duckduckgo.com"), "{input}");
             assert_eq!(url.query_pairs().next().unwrap().1, input);
         }
@@ -489,7 +561,7 @@ mod tests {
             "file://server/share/a.html",
             "file://user:pw@localhost/tmp/a",
         ] {
-            assert!(destination(input).is_err(), "accepted {input}");
+            assert!(destination(input, DDG).is_err(), "accepted {input}");
             assert!(!allowed_address(input), "allowed {input}");
         }
     }
@@ -604,11 +676,11 @@ mod tests {
 
     #[test]
     fn address_entries_offer_app_links_and_keep_search_and_hosts() {
-        let app = |input: &str| match entry(input).unwrap_or_else(|e| panic!("{input}: {e}")) {
+        let app = |input: &str| match entry(input, DDG).unwrap_or_else(|e| panic!("{input}: {e}")) {
             Entry::App(url) => url.to_string(),
             Entry::Web(url) => panic!("{input} became {url}"),
         };
-        let web = |input: &str| match entry(input).unwrap_or_else(|e| panic!("{input}: {e}")) {
+        let web = |input: &str| match entry(input, DDG).unwrap_or_else(|e| panic!("{input}: {e}")) {
             Entry::Web(url) => url,
             Entry::App(url) => panic!("{input} offered to an app as {url}"),
         };
@@ -639,11 +711,11 @@ mod tests {
             "x-apple.systempreferences:com.apple.preference.security",
             "applescript://com.apple.scripteditor?action=new",
         ] {
-            assert!(entry(never).is_err(), "accepted {never}");
+            assert!(entry(never, DDG).is_err(), "accepted {never}");
         }
         let long = format!("mailto:a@example.com?body={}", "x".repeat(APP_LINK_MAX));
         assert!(
-            !matches!(entry(&long), Ok(Entry::App(_))),
+            !matches!(entry(&long, DDG), Ok(Entry::App(_))),
             "uncapped app link"
         );
     }

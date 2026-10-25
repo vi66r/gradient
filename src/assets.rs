@@ -26,7 +26,8 @@ gpui::assets::icon_assets!(
         VolumeX,
         SkipBack,
         SkipForward,
-        Download
+        Download,
+        AppWindow
     ]
 );
 

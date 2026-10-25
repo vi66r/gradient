@@ -4,13 +4,16 @@ mod assets;
 mod downloads;
 mod engine;
 mod favicon;
+mod history;
 mod http_client;
 mod lifecycle;
 mod mcp;
 mod model;
 mod permissions;
 mod session;
+mod settings;
 mod spaces;
+mod suggest;
 mod ui;
 mod zoom;
 
@@ -59,9 +62,17 @@ actions!(
         DeleteSpace,
         NextSpace,
         PreviousSpace,
+        ClearHistory,
         Quit
     ]
 );
+
+/// Browser ▸ Search Engine: where searches from the address field go.
+#[derive(Clone, PartialEq, serde::Deserialize, Action)]
+#[action(namespace = browser, no_json)]
+struct SetSearchEngine {
+    engine: model::SearchEngine,
+}
 
 struct Tab {
     id: u64,
@@ -191,6 +202,13 @@ struct Browser {
     /// The active page's matches for the current query, once WebKit reports.
     find_matches: Option<engine::Matches>,
     zooms: zoom::Zooms,
+    /// Per-Space browsing history; never the Private Space's.
+    history: history::History,
+    settings: settings::Settings,
+    /// The address field's suggestions list; see `suggest.rs`.
+    suggest: suggest::Suggestions,
+    /// Where the address pill was last laid out, for the list beneath it.
+    address_bounds: Rc<std::cell::Cell<Bounds<Pixels>>>,
     focus: FocusHandle,
     events: async_channel::Sender<engine::Event>,
     store: session::Store,
@@ -198,6 +216,8 @@ struct Browser {
     notice: Option<String>,
     copy_feedback: Option<CopyTarget>,
     copy_epoch: u64,
+    /// The field was filled and selected ahead of its focus event.
+    address_primed: bool,
     /// Where a press on the resting address began, until it clicks or drags.
     address_press: Option<Point<Pixels>>,
     discard_pending: bool,
@@ -269,21 +289,29 @@ impl Browser {
             // selected so typing replaces it. Setting the value clears any
             // selection, so this selects after the swap.
             if matches!(event, InputEvent::Focus) {
-                this.sync_address(window, cx);
-                input.update(cx, |input, cx| input.select_all(window, cx));
+                // `focus_address` already did this; keys typed since must stay.
+                if !std::mem::take(&mut this.address_primed) {
+                    this.sync_address(window, cx);
+                    input.update(cx, |input, cx| input.select_all(window, cx));
+                }
+                this.suggest.typed.clear();
+                this.suggest.completion.clear();
+            }
+            if matches!(event, InputEvent::Blur) {
+                this.close_suggestions();
             }
             if matches!(event, InputEvent::Focus | InputEvent::Blur) {
                 cx.notify();
             }
+            if matches!(event, InputEvent::Change) {
+                this.address_changed(window, cx);
+            }
             if matches!(event, InputEvent::PressEnter { .. }) {
-                let value = input.read(cx).value().to_string();
-                match model::entry(&value) {
-                    Ok(model::Entry::Web(url)) => this.navigate(url, window, cx),
-                    Ok(model::Entry::App(url)) => this.typed_app_link(url, window, cx),
-                    Err(error) => {
-                        this.notice = Some(error.to_string());
-                        cx.notify();
-                    }
+                if this.suggest.open {
+                    this.choose_suggestion(this.suggest.selected, window, cx);
+                } else {
+                    let value = input.read(cx).value().to_string();
+                    this.enter_address(&value, window, cx);
                 }
             }
         });
@@ -319,6 +347,8 @@ impl Browser {
         let permissions = permissions::Store::open(store.dir());
         let icon_cache = favicon::DiskCache::new(store.dir());
         let zooms = zoom::Zooms::load(store.dir());
+        let history = history::History::new(store.dir());
+        let settings = settings::Settings::load(store.dir());
         let mut this = Self {
             tabs: restored.tabs,
             parked: restored.parked,
@@ -339,6 +369,10 @@ impl Browser {
             finding: None,
             find_matches: None,
             zooms,
+            history,
+            settings,
+            suggest: Default::default(),
+            address_bounds: Default::default(),
             focus: cx.focus_handle(),
             events,
             store,
@@ -346,6 +380,7 @@ impl Browser {
             notice,
             copy_feedback: None,
             copy_epoch: 0,
+            address_primed: false,
             address_press: None,
             discard_pending: false,
             #[cfg(target_os = "macos")]
@@ -404,6 +439,8 @@ impl Browser {
                             && url != this.tabs[this.active].saved.url
                         {
                             this.tabs[this.active].saved.url = url;
+                            // An app that changed its address in place.
+                            this.record_visit(this.tabs[this.active].id);
                             this.revoke_changed_origins();
                             this.dirty = true;
                             if !this.address.read(cx).focus_handle(cx).is_focused(window) {
@@ -425,6 +462,9 @@ impl Browser {
                         }
                         if this.dirty {
                             this.save();
+                        }
+                        if let Err(error) = this.history.flush() {
+                            log::error!("History not saved: {error}");
                         }
                     })
                     .is_err()
@@ -538,6 +578,7 @@ impl Browser {
         }
         self.active = index;
         self.lab = false;
+        self.reset_suggestions();
         self.ensure_page(index, window, cx);
         self.sync_address(window, cx);
         window.focus(&self.focus, cx);
@@ -591,6 +632,28 @@ impl Browser {
         if self.tabs[self.active].saved.url == START {
             self.focus_address(window, cx);
         }
+    }
+
+    /// Enter in the address field: an address, a search or an app link.
+    fn enter_address(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match model::entry(value, self.settings.search) {
+            Ok(model::Entry::Web(url)) => self.navigate(url, window, cx),
+            Ok(model::Entry::App(url)) => self.typed_app_link(url, window, cx),
+            Err(error) => {
+                self.notice = Some(error.to_string());
+                cx.notify();
+            }
+        }
+    }
+
+    /// Browser ▸ Search Engine.
+    fn set_search_engine(&mut self, engine: model::SearchEngine, cx: &mut Context<Self>) {
+        self.settings.search = engine;
+        if let Err(error) = self.settings.save(self.store.dir()) {
+            self.notice = Some(format!("Search engine not saved: {error}"));
+        }
+        cx.set_menus(menus(engine));
+        cx.notify();
     }
 
     /// An app link typed into the address field (`mailto:…`). Private tabs may
@@ -1064,18 +1127,24 @@ impl Browser {
         cx.notify();
     }
 
-    /// Focus fills in and selects the URL (see the address subscription).
+    /// Fills in and selects the URL, then focuses the field. GPUI reports
+    /// the focus on its next frame; doing this first keeps keys typed right
+    /// after ⌘L instead of replacing them with the URL.
     fn focus_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(page) = &self.tabs[self.active].page {
             let _ = page.raw.focus_parent();
         }
+        if self.address_focused(window, cx) {
+            // Already editing, so no focus event: select here.
+            self.address
+                .update(cx, |input, cx| input.select_all(window, cx));
+            return;
+        }
+        self.sync_address(window, cx);
+        self.address_primed = true;
         self.address.update(cx, |input, cx| {
-            if input.focus_handle(cx).is_focused(window) {
-                // Already editing, so no focus event: select here.
-                input.select_all(window, cx);
-            } else {
-                input.focus(window, cx);
-            }
+            input.select_all(window, cx);
+            input.focus(window, cx);
         });
     }
 
@@ -1473,12 +1542,15 @@ impl Browser {
                 if let Some(tab) = self.tab_mut(id) {
                     tab.saved.title = title;
                     self.dirty = true;
+                    self.record_title(id);
                 }
             }
+            engine::Event::Snapshot { id, image } => self.page_snapshot(id, image),
             engine::Event::MediaChanged(id) => self.media_changed(id, cx),
             engine::Event::PageTint(id, tint) => self.settle_tint(id, tint, cx),
             engine::Event::Committed(id) => {
                 self.follow_site_zoom(id);
+                self.record_visit(id);
                 // The old document's matches are gone. The bar stays open and
                 // Enter searches the new one.
                 if self.finding == Some(id) {
@@ -2068,7 +2140,10 @@ impl Browser {
         }
     }
 
-    fn finish_quit(&self, cx: &App) {
+    fn finish_quit(&mut self, cx: &App) {
+        if let Err(error) = self.history.flush() {
+            log::error!("History not saved: {error}");
+        }
         // Partial files would otherwise stay in Downloads.
         engine::cancel_downloads();
         #[cfg(target_os = "macos")]
@@ -2125,6 +2200,74 @@ impl Browser {
     }
 }
 
+/// The menu bar; rebuilt when the search engine changes, for its checkmark.
+fn menus(engine: model::SearchEngine) -> Vec<Menu> {
+    vec![
+        Menu::new("Browser").items([
+            MenuItem::submenu(
+                Menu::new("Search Engine").items(model::SearchEngine::ALL.map(|choice| {
+                    MenuItem::action(choice.name(), SetSearchEngine { engine: choice })
+                        .checked(choice == engine)
+                })),
+            ),
+            MenuItem::separator(),
+            MenuItem::action("Quit Browser", Quit),
+        ]),
+        Menu::new("File").items([
+            MenuItem::action("New Tab", NewTab),
+            MenuItem::action("New Private Tab", NewPrivateTab),
+            MenuItem::action("Open File…", OpenFile),
+            MenuItem::action("Close Tab", CloseTab),
+            MenuItem::action("Reopen Closed Tab", ReopenTab),
+            MenuItem::separator(),
+            MenuItem::action("Print…", Print),
+        ]),
+        Menu::new("Edit").items([
+            MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
+            MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
+            MenuItem::separator(),
+            MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
+            MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
+            MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
+            MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
+            MenuItem::separator(),
+            MenuItem::action("Find…", Find),
+            MenuItem::action("Find Next", FindNext),
+            MenuItem::action("Find Previous", FindPrevious),
+        ]),
+        Menu::new("View").items([
+            MenuItem::action("Actual Size", ActualSize),
+            MenuItem::action("Zoom In", ZoomIn),
+            MenuItem::action("Zoom Out", ZoomOut),
+        ]),
+        Menu::new("Navigate").items([
+            MenuItem::action("Open Location", FocusAddress),
+            MenuItem::action("Copy Address", CopyUrl),
+            MenuItem::action("Back", Back),
+            MenuItem::action("Forward", Forward),
+            MenuItem::action("Reload", Reload),
+            MenuItem::action("Next Tab", NextTab),
+            MenuItem::action("Previous Tab", PreviousTab),
+        ]),
+        Menu::new("History").items([MenuItem::action("Clear History…", ClearHistory)]),
+        Menu::new("Spaces").items([
+            MenuItem::action("New Space", NewSpace),
+            MenuItem::action("Rename Space…", RenameSpace),
+            MenuItem::action("Delete Space…", DeleteSpace),
+            MenuItem::separator(),
+            MenuItem::action("Next Space", NextSpace),
+            MenuItem::action("Previous Space", PreviousSpace),
+        ]),
+        Menu::new("Tools").items([
+            MenuItem::action("Request Lab", RequestLab),
+            MenuItem::action("Inspect Page", Inspect),
+            MenuItem::action("Site Permissions…", SitePermissions),
+            MenuItem::action("Suspend Current Tab…", Suspend),
+            MenuItem::action("Share / Revoke Agent Access…", ToggleAgent),
+        ]),
+    ]
+}
+
 fn profile_id(dir: &std::path::Path) -> anyhow::Result<[u8; 16]> {
     let path = dir.join("profile-id");
     if path.exists() {
@@ -2159,9 +2302,10 @@ fn main() -> anyhow::Result<()> {
             )),
         ),
     };
+    let search = settings::Settings::load(&dir).search;
     let initial = std::env::args()
         .nth(1)
-        .map(|url| model::destination(&url))
+        .map(|url| model::destination(&url, search))
         .transpose()?;
     #[cfg(target_os = "linux")]
     let app = gpui::platform::linux(WindowingModes::X11);
@@ -2213,60 +2357,7 @@ fn main() -> anyhow::Result<()> {
                 None,
             )
         }));
-        cx.set_menus([
-            Menu::new("Browser").items([MenuItem::action("Quit Browser", Quit)]),
-            Menu::new("File").items([
-                MenuItem::action("New Tab", NewTab),
-                MenuItem::action("New Private Tab", NewPrivateTab),
-                MenuItem::action("Open File…", OpenFile),
-                MenuItem::action("Close Tab", CloseTab),
-                MenuItem::action("Reopen Closed Tab", ReopenTab),
-                MenuItem::separator(),
-                MenuItem::action("Print…", Print),
-            ]),
-            Menu::new("Edit").items([
-                MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
-                MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
-                MenuItem::separator(),
-                MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
-                MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
-                MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
-                MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
-                MenuItem::separator(),
-                MenuItem::action("Find…", Find),
-                MenuItem::action("Find Next", FindNext),
-                MenuItem::action("Find Previous", FindPrevious),
-            ]),
-            Menu::new("View").items([
-                MenuItem::action("Actual Size", ActualSize),
-                MenuItem::action("Zoom In", ZoomIn),
-                MenuItem::action("Zoom Out", ZoomOut),
-            ]),
-            Menu::new("Navigate").items([
-                MenuItem::action("Open Location", FocusAddress),
-                MenuItem::action("Copy Address", CopyUrl),
-                MenuItem::action("Back", Back),
-                MenuItem::action("Forward", Forward),
-                MenuItem::action("Reload", Reload),
-                MenuItem::action("Next Tab", NextTab),
-                MenuItem::action("Previous Tab", PreviousTab),
-            ]),
-            Menu::new("Spaces").items([
-                MenuItem::action("New Space", NewSpace),
-                MenuItem::action("Rename Space…", RenameSpace),
-                MenuItem::action("Delete Space…", DeleteSpace),
-                MenuItem::separator(),
-                MenuItem::action("Next Space", NextSpace),
-                MenuItem::action("Previous Space", PreviousSpace),
-            ]),
-            Menu::new("Tools").items([
-                MenuItem::action("Request Lab", RequestLab),
-                MenuItem::action("Inspect Page", Inspect),
-                MenuItem::action("Site Permissions…", SitePermissions),
-                MenuItem::action("Suspend Current Tab…", Suspend),
-                MenuItem::action("Share / Revoke Agent Access…", ToggleAgent),
-            ]),
-        ]);
+        cx.set_menus(menus(search));
         let (handle, view) = gpui::open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
