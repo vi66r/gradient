@@ -186,6 +186,13 @@ struct Browser {
     before_private: Option<[u8; 16]>,
     /// Bumped on every switch, so the tab list fades in afresh.
     space_epoch: u64,
+    /// Which side the incoming Space's tabs slide in from: -1, 0 or 1.
+    space_slide: f32,
+    /// The Spaces row, so a switch can bring the current Space into view.
+    space_scroll: ScrollHandle,
+    /// A sideways swipe over the tabs in progress: how far it has gone, or
+    /// `None` once it switched (one Space per swipe) or between swipes.
+    swipe: Option<f32>,
     /// The current Space's name while it is being edited in the switcher.
     space_name: Entity<InputState>,
     renaming: bool,
@@ -365,6 +372,9 @@ impl Browser {
             space: restored.current,
             before_private: None,
             space_epoch: 0,
+            space_slide: 0.,
+            space_scroll: ScrollHandle::new(),
+            swipe: None,
             space_name,
             renaming: false,
             profile,
@@ -421,7 +431,7 @@ impl Browser {
                 }),
             ],
         };
-        engine::set_notification_sites(this.notification_sites());
+        this.sync_notification_sites();
         // Before the first page, so it joins a controller with its Space's
         // extensions already loading.
         this.start_extensions(cx);
@@ -870,7 +880,7 @@ impl Browser {
                         this.notice = Some(error.to_string());
                     }
                     if kinds.contains(&permissions::Kind::Notifications) {
-                        engine::set_notification_site(&site, true);
+                        engine::set_notification_site(this.profile, &site, true);
                     }
                 }
                 let _ = reply.try_send(allow);
@@ -926,7 +936,7 @@ impl Browser {
                     this.notice = Some(error.to_string());
                 }
                 if granted.contains(&permissions::Kind::Notifications) {
-                    engine::set_notification_site(&site, false);
+                    engine::set_notification_site(this.profile, &site, false);
                 }
                 for tab in this.tabs.iter().filter(|tab| !tab.private) {
                     if let Some(page) = &tab.page

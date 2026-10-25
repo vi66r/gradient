@@ -186,7 +186,7 @@ pub fn tools() -> Vec<Value> {
     for (name, description, fields) in [
         (
             "browser_tabs",
-            "List only the tabs the user explicitly shared with agents.",
+            "List only the tabs the user explicitly shared with agents, in any Space.",
             vec![],
         ),
         (

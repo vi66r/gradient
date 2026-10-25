@@ -96,21 +96,16 @@ impl Browser {
             .w(px(SIDEBAR))
             .flex_shrink_0()
             .h_full()
-            // The traffic lights' row, with the Spaces switcher beside them.
+            // The traffic lights' row.
             .child(
                 div()
                     .id("sidebar-titlebar")
                     .h(px(CONTROL_ZONE))
                     .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    // Clear of the traffic lights.
-                    .pl(px(76.))
-                    .pr_2()
-                    .on_mouse_down(MouseButton::Left, move_window)
-                    .child(self.space_switcher(p, cx)),
+                    .on_mouse_down(MouseButton::Left, move_window),
             )
+            // Spaces, in a section of their own above the tabs.
+            .child(self.space_switcher(p, cx))
             .child(
                 div()
                     .id("tab-list")
@@ -143,11 +138,22 @@ impl Browser {
                             })),
                     )
                     .children((0..self.tabs.len()).map(|index| self.tab_row(index, p, window, cx)))
-                    // A Space's tabs arrive together, like a page does.
+                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                        this.space_swipe(event, window, cx)
+                    }))
+                    // A Space's tabs arrive together, like a page does, sliding
+                    // in from the side the Space sits on.
+                    .relative()
                     .with_animation(
                         ("space-tabs", self.space_epoch),
                         Animation::new(NORMAL).with_easing(ease_out_quint()),
-                        |list, delta| list.opacity(0.35 + 0.65 * delta),
+                        {
+                            let slide = self.space_slide;
+                            move |list, delta| {
+                                list.opacity(0.35 + 0.65 * delta)
+                                    .left(px(16. * slide * (1. - delta)))
+                            }
+                        },
                     ),
             )
             // The footer: downloads, when there are any, then the tools.
@@ -395,127 +401,144 @@ impl Browser {
             .children(bar)
     }
 
-    /// The current Space as a pill with its name, the others as dots, and a
-    /// button for a new one. Right-click a Space for its menu; double-click
-    /// the current one to rename it.
+    /// Spaces as a row of chips above the tabs: each with its color and name,
+    /// the current one filled, and a button for a new one at the end. When
+    /// the names don't all fit, the other Spaces shrink to their color dots
+    /// (named in a tooltip); past that the row scrolls sideways. Right-click
+    /// a Space for its menu; double-click the current one to rename it.
     fn space_switcher(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let wash = if self.dark { 0xffffff14 } else { 0x0000000d };
         let saved = self.spaces.iter().filter(|space| !space.private).count();
-        let chips =
-            self.spaces.iter().enumerate().map(|(index, space)| {
-                let current = index == self.space;
-                let color = space_color(space, self.dark);
-                let id = space.id;
-                let shortcut = (index < 9 && !space.private).then(|| format!("  ⌃{}", index + 1));
-                let tip: SharedString =
-                    format!("{}{}", space.name, shortcut.unwrap_or_default()).into();
-                let mark = if space.private {
-                    Icon::new(IconName::Lock)
-                        .size_3()
-                        .text_color(rgb(color))
-                        .into_any_element()
-                } else {
-                    div()
-                        .size(px(if current { 8. } else { 7. }))
-                        .flex_shrink_0()
-                        .rounded_full()
-                        .bg(rgb(color))
-                        .into_any_element()
-                };
-                let chip = div()
-                    .id(("space", index))
-                    .role(Role::Tab)
-                    .aria_label(space.name.clone())
-                    .aria_selected(current)
-                    .h(px(24.))
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .rounded_full()
-                    .cursor_pointer()
-                    // Chips are controls, not titlebar.
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                            cx.stop_propagation();
-                            this.space_menu(id, event.position, window, cx);
-                        }),
-                    );
-                if !current {
-                    return chip
-                        .w(px(24.))
-                        .justify_center()
-                        .opacity(0.8)
-                        .hover(move |s| s.bg(rgba(wash)).opacity(1.))
-                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-                        .child(mark)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.switch_space(index, window, cx)
-                        }))
-                        .into_any_element();
-                }
-                let label = if self.renaming {
-                    div()
-                        .w(px(88.))
-                        .min_w_0()
-                        .child(
-                            Input::new(&self.space_name)
-                                .appearance(false)
-                                .aria_label("Space name")
-                                .h(px(22.))
-                                .py_0()
-                                .px_0()
-                                .text_size(px(12.)),
-                        )
-                        .into_any_element()
-                } else {
-                    div()
-                        .min_w_0()
-                        .max_w(px(96.))
-                        .truncate()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(p.ink))
-                        .child(space.name.clone())
-                        .into_any_element()
-                };
-                // The current Space gives way first when the row runs out of room.
-                chip.min_w_0()
-                    .flex_shrink(1.)
-                    .pl(px(9.))
-                    .pr(px(10.))
-                    .gap(px(7.))
-                    .bg(rgba(wash))
-                    .child(mark)
-                    .child(label)
-                    .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                        if event.click_count() == 2 {
-                            this.begin_rename(window, cx);
-                        }
-                    }))
-                    // A click anywhere else keeps the name, as in Finder;
-                    // empty areas don't take focus, so blur alone can miss it.
-                    .when(self.renaming, |pill| {
-                        pill.on_mouse_down_out(
-                            cx.listener(|this, _, window, cx| this.finish_rename(true, window, cx)),
-                        )
-                    })
+        // Roughly: chip padding, dot and gap, plus the name at this size.
+        let named = |space: &spaces::Space| 37. + space.name.chars().count().min(16) as f32 * 7.;
+        let room = SIDEBAR - 16. - 32.;
+        let compact = self.spaces.iter().map(named).sum::<f32>()
+            + 4. * self.spaces.len().saturating_sub(1) as f32
+            > room;
+        let chips = self.spaces.iter().enumerate().map(|(index, space)| {
+            let current = index == self.space;
+            let dot_only = compact && !current;
+            let color = space_color(space, self.dark);
+            let id = space.id;
+            let shortcut = (index < 9 && !space.private).then(|| format!("⌃{}", index + 1));
+            // Named in the tooltip only when the chip doesn't show the name.
+            let tip = match (dot_only, shortcut) {
+                (true, Some(shortcut)) => Some(format!("{}  {shortcut}", space.name)),
+                (true, None) => Some(space.name.clone()),
+                (false, shortcut) => shortcut,
+            };
+            let mark = if space.private {
+                Icon::new(IconName::Lock)
+                    .size_3()
+                    .text_color(rgb(color))
                     .into_any_element()
-            });
+            } else {
+                div()
+                    .size(px(8.))
+                    .flex_shrink_0()
+                    .rounded_full()
+                    .bg(rgb(color))
+                    .into_any_element()
+            };
+            let label = if current && self.renaming {
+                div()
+                    .w(px(96.))
+                    .min_w_0()
+                    .child(
+                        Input::new(&self.space_name)
+                            .appearance(false)
+                            .aria_label("Space name")
+                            .h(px(24.))
+                            .py_0()
+                            .px_0()
+                            .text_size(px(12.5)),
+                    )
+                    .into_any_element()
+            } else {
+                div()
+                    .min_w_0()
+                    .max_w(px(112.))
+                    .truncate()
+                    .text_size(px(12.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(space.name.clone())
+                    .into_any_element()
+            };
+            div()
+                .id(("space", index))
+                .role(Role::Tab)
+                .aria_label(space.name.clone())
+                .aria_selected(current)
+                .h(px(28.))
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .when(dot_only, |chip| chip.w(px(28.)).justify_center())
+                .when(!dot_only, |chip| chip.gap(px(7.)).pl(px(10.)).pr(px(12.)))
+                .rounded_full()
+                .cursor_pointer()
+                .text_color(rgb(if current { p.ink } else { p.muted }))
+                .when(current, |chip| chip.bg(rgba(wash)))
+                .when(!current, |chip| {
+                    chip.hover(move |s| s.bg(rgba(wash)).text_color(rgb(p.ink)))
+                })
+                .when_some(tip, |chip, tip| {
+                    let tip: SharedString = tip.into();
+                    chip.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                })
+                .child(mark)
+                .when(!dot_only, |chip| chip.child(label))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.space_menu(id, event.position, window, cx);
+                    }),
+                )
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    if index != this.space {
+                        this.switch_space(index, window, cx);
+                    } else if event.click_count() == 2 {
+                        this.begin_rename(window, cx);
+                    }
+                }))
+                // A click anywhere else keeps the name, as in Finder; empty
+                // areas don't take focus, so blur alone can miss it.
+                .when(current && self.renaming, |chip| {
+                    chip.on_mouse_down_out(
+                        cx.listener(|this, _, window, cx| this.finish_rename(true, window, cx)),
+                    )
+                })
+                .into_any_element()
+        });
         div()
+            .id("spaces")
+            .flex_shrink_0()
+            .px_2()
+            .pb(px(6.))
             .flex()
             .items_center()
-            .min_w_0()
-            .gap_0p5()
-            .children(chips)
-            .when(saved < model::MAX_SPACES, |row| {
-                row.child(
+            .gap_1()
+            .child(
+                div()
+                    .id("space-row")
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .overflow_x_scroll()
+                    .track_scroll(&self.space_scroll)
+                    .children(chips),
+            )
+            // Outside the scrolling row, so it's always within reach.
+            .when(saved < model::MAX_SPACES, |section| {
+                section.child(
                     div()
                         .id("new-space")
                         .role(Role::Button)
                         .aria_label("New Space")
-                        .size(px(24.))
+                        .size(px(28.))
                         .flex_shrink_0()
                         .flex()
                         .items_center()
@@ -525,7 +548,6 @@ impl Browser {
                         .text_color(rgb(p.muted))
                         .hover(move |s| s.bg(rgba(wash)).text_color(rgb(p.ink)))
                         .tooltip(|window, cx| Tooltip::new("New Space").build(window, cx))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(Icon::new(IconName::Plus).size_3p5())
                         .on_click(cx.listener(|this, _, window, cx| this.new_space(window, cx))),
                 )

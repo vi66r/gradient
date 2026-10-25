@@ -688,20 +688,21 @@ impl Drop for Page {
     }
 }
 
-/// Sites the user allowed to send notifications, for pages that start later.
-pub fn set_notification_sites(sites: Vec<String>) {
+/// Sites a Space allowed to send notifications, for its pages that start later.
+pub fn set_notification_sites(profile: [u8; 16], sites: Vec<String>) {
     #[cfg(target_os = "macos")]
-    notifications::set_allowed(sites);
+    notifications::set_allowed(profile, sites);
     #[cfg(not(target_os = "macos"))]
-    let _ = sites;
+    let _ = (profile, sites);
 }
 
-/// The user allowed or reset a site's notifications; open pages learn it now.
-pub fn set_notification_site(site: &str, allowed: bool) {
+/// The user allowed or reset a site's notifications in a Space; its open
+/// pages learn it now.
+pub fn set_notification_site(profile: [u8; 16], site: &str, allowed: bool) {
     #[cfg(target_os = "macos")]
-    notifications::set_site(site, allowed);
+    notifications::set_site(profile, site, allowed);
     #[cfg(not(target_os = "macos"))]
-    let _ = (site, allowed);
+    let _ = (profile, site, allowed);
 }
 
 /// Tells the page its notification was clicked; returns the tab to show.
@@ -902,7 +903,7 @@ impl Page {
             host.foreground.clone(),
             host.background.clone(),
         );
-        notifications::install(&view, id, &host.events);
+        notifications::install(&view, id, profile, &host.events);
         let opener = host.clone();
         let site = site::Site::install(
             &view,

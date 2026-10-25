@@ -76,8 +76,13 @@ impl Browser {
         .detach();
     }
 
+    /// Shared tabs in every Space keep their grant only while on its origin.
     pub(crate) fn revoke_changed_origins(&mut self) {
-        for tab in &mut self.tabs {
+        let parked = self
+            .parked
+            .values_mut()
+            .flat_map(|parked| parked.tabs.iter_mut());
+        for tab in self.tabs.iter_mut().chain(parked) {
             if let Some((origin, _)) = &tab.grant
                 && tab
                     .page
@@ -126,17 +131,27 @@ impl Browser {
             "Unexpected or missing arguments"
         );
         if command.name == "browser_tabs" {
-            return Ok(Some(
-                json!({"tabs":self.tabs.iter().filter(|t|t.grant.is_some()).map(|t|json!({"tab_id":t.id,"title":t.saved.title,"url":t.saved.url})).collect::<Vec<_>>()}),
-            ));
+            // Shared tabs in every Space; parked pages keep running.
+            let shared: Vec<Value> = self
+                .all_tabs()
+                .filter(|t| t.grant.is_some())
+                .map(|t| {
+                    let space = self
+                        .space_of(t.id)
+                        .map(|index| self.spaces[index].name.clone())
+                        .unwrap_or_default();
+                    json!({"tab_id":t.id,"title":t.saved.title,"url":t.saved.url,"space":space})
+                })
+                .collect();
+            return Ok(Some(json!({ "tabs": shared })));
         }
         let id = args["tab_id"]
             .as_u64()
             .ok_or_else(|| anyhow::anyhow!("tab_id must be a positive integer"))?;
+        let discard_pending = self.discard_pending;
+        let events = self.events.clone();
         let tab = self
-            .tabs
-            .iter_mut()
-            .find(|t| t.id == id)
+            .tab_mut(id)
             .ok_or_else(|| anyhow::anyhow!("Tab is unavailable or not shared"))?;
         let (origin, epoch) = tab
             .grant
@@ -151,8 +166,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Tab is suspended"))?;
         anyhow::ensure!(
-            command.name == "browser_read_page"
-                || (!self.discard_pending && !page.navigation_pending()),
+            command.name == "browser_read_page" || (!discard_pending && !page.navigation_pending()),
             "Wait for the browser's pending page check or confirmation"
         );
         anyhow::ensure!(
@@ -174,7 +188,6 @@ impl Browser {
             ));
         }
         let script = mcp::script(&command.name, args, &origin)?;
-        let events = self.events.clone();
         let reply = command.reply.clone();
         page.raw
             .evaluate_script_with_callback(&script, move |value| {
@@ -200,8 +213,7 @@ impl Browser {
     ) {
         self.revoke_changed_origins();
         let valid = self
-            .tabs
-            .iter()
+            .all_tabs()
             .any(|tab| tab.id == id && tab.grant.as_ref() == Some(&(origin.clone(), epoch)));
         let result = if !valid {
             Err("Agent access was revoked or the tab changed origin.".into())

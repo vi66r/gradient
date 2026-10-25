@@ -16,7 +16,7 @@ use objc2_foundation::{NSBundle, NSError, NSString, NSUInteger};
 use objc2_web_kit::WKWebView;
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     ffi::{CStr, c_char, c_void},
     sync::OnceLock,
 };
@@ -123,20 +123,36 @@ struct Provider {
     clear: extern "C" fn(Ref, *const c_void),
 }
 
-// Only its function pointers are read, and `client_info` is null.
-unsafe impl Sync for Provider {}
+/// One provider per Space: WebKit asks for permissions without naming the
+/// pool, so `client_info` carries the Space's profile ID (leaked, as the
+/// provider lives as long as WebKit may call it).
+fn provider_for(profile: [u8; 16]) -> *const Provider {
+    STATE.with(|state| {
+        *state
+            .borrow_mut()
+            .providers
+            .entry(profile)
+            .or_insert_with(|| {
+                let client_info = Box::into_raw(Box::new(profile)) as *const c_void;
+                Box::into_raw(Box::new(Provider {
+                    version: 0,
+                    client_info,
+                    show,
+                    cancel,
+                    did_destroy,
+                    add_manager,
+                    remove_manager,
+                    permissions,
+                    clear,
+                })) as usize
+            }) as *const Provider
+    })
+}
 
-static PROVIDER: Provider = Provider {
-    version: 0,
-    client_info: std::ptr::null(),
-    show,
-    cancel,
-    did_destroy,
-    add_manager,
-    remove_manager,
-    permissions,
-    clear,
-};
+fn profile_of(client_info: *const c_void) -> Option<[u8; 16]> {
+    // Set by `provider_for`; never null for our providers.
+    (!client_info.is_null()).then(|| unsafe { *(client_info as *const [u8; 16]) })
+}
 
 /// One shown notification: which pool's manager owns it, and its tab.
 struct Shown {
@@ -149,10 +165,13 @@ struct Shown {
 struct State {
     /// `WKPageRef` → tab ID.
     pages: HashMap<usize, u64>,
-    /// Every pool's notification manager, to tell them of policy changes.
-    managers: HashSet<usize>,
-    /// Sites allowed to notify, as origins (`https://chat.example`).
-    allowed: Vec<String>,
+    /// Every pool's notification manager and the Space it belongs to, to
+    /// tell them of policy changes.
+    managers: HashMap<usize, [u8; 16]>,
+    /// The provider for each Space, as an address; see `provider_for`.
+    providers: HashMap<[u8; 16], usize>,
+    /// Sites allowed to notify, as origins (`https://chat.example`), by Space.
+    allowed: HashMap<[u8; 16], Vec<String>>,
     /// Notification Center identifier → the notification behind it.
     shown: HashMap<String, Shown>,
     center: Option<Retained<AnyObject>>,
@@ -192,7 +211,8 @@ fn manager_of(api: &Api, page: usize) -> usize {
 
 /// Lets a page's pool deliver notifications and remembers which tab it is.
 /// Each configuration has its own pool; a popup shares its opener's.
-pub fn install(view: &WKWebView, tab: u64, events: &Sender<Event>) {
+/// `profile` names the page's Space, whose permissions the pool gets.
+pub fn install(view: &WKWebView, tab: u64, profile: [u8; 16], events: &Sender<Event>) {
     let (Some(api), Some(page)) = (api(), page_ref(view)) else {
         return;
     };
@@ -200,15 +220,16 @@ pub fn install(view: &WKWebView, tab: u64, events: &Sender<Event>) {
     let new = STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.pages.insert(page, tab);
-        !state.managers.contains(&manager)
+        !state.managers.contains_key(&manager)
     });
     // Outside the borrow: WebKit calls `add_manager` back from inside.
     if new {
-        unsafe { (api.set_provider)(manager as Ref, &PROVIDER) };
+        let provider = provider_for(profile);
+        unsafe { (api.set_provider)(manager as Ref, provider) };
     }
     STATE.with(|state| {
         let mut state = state.borrow_mut();
-        state.managers.insert(manager);
+        state.managers.insert(manager, profile);
         if state.center.is_none() {
             state.center = notification_center();
             if let Some(center) = &state.center {
@@ -227,24 +248,30 @@ pub fn forget(view: &WKWebView) {
     }
 }
 
-/// The sites remembered as allowed, read by each pool as it starts.
-pub fn set_allowed(sites: Vec<String>) {
-    STATE.with(|state| state.borrow_mut().allowed = sites);
+/// A Space's sites remembered as allowed, read by its pools as they start.
+pub fn set_allowed(profile: [u8; 16], sites: Vec<String>) {
+    STATE.with(|state| state.borrow_mut().allowed.insert(profile, sites));
 }
 
-/// The user allowed (or reset) a site: tell every pool, so pages already
-/// open read the new `Notification.permission`.
-pub fn set_site(site: &str, allowed: bool) {
+/// The user allowed (or reset) a site in a Space: tell that Space's pools,
+/// so its pages already open read the new `Notification.permission`.
+pub fn set_site(profile: [u8; 16], site: &str, allowed: bool) {
     let Some(api) = api() else {
         return;
     };
     let managers: Vec<usize> = STATE.with(|state| {
         let mut state = state.borrow_mut();
-        state.allowed.retain(|known| known != site);
+        let sites = state.allowed.entry(profile).or_default();
+        sites.retain(|known| known != site);
         if allowed {
-            state.allowed.push(site.to_string());
+            sites.push(site.to_string());
         }
-        state.managers.iter().copied().collect()
+        state
+            .managers
+            .iter()
+            .filter(|(_, space)| **space == profile)
+            .map(|(manager, _)| *manager)
+            .collect()
     });
     let Ok(text) = std::ffi::CString::new(site) else {
         return;
@@ -423,19 +450,28 @@ extern "C" fn cancel(notification: Ref, _: *const c_void) {
 // The page's Notification object was collected; what's on screen stays.
 extern "C" fn did_destroy(_: Ref, _: *const c_void) {}
 
-extern "C" fn add_manager(manager: Ref, _: *const c_void) {
-    STATE.with(|state| state.borrow_mut().managers.insert(manager as usize));
+extern "C" fn add_manager(manager: Ref, client_info: *const c_void) {
+    if let Some(profile) = profile_of(client_info) {
+        STATE.with(|state| {
+            state
+                .borrow_mut()
+                .managers
+                .insert(manager as usize, profile)
+        });
+    }
 }
 
 extern "C" fn remove_manager(manager: Ref, _: *const c_void) {
     STATE.with(|state| state.borrow_mut().managers.remove(&(manager as usize)));
 }
 
-extern "C" fn permissions(_: *const c_void) -> Ref {
+extern "C" fn permissions(client_info: *const c_void) -> Ref {
     let Some(api) = api() else {
         return std::ptr::null();
     };
-    let allowed = STATE.with(|state| state.borrow().allowed.clone());
+    let allowed = profile_of(client_info)
+        .and_then(|profile| STATE.with(|state| state.borrow().allowed.get(&profile).cloned()))
+        .unwrap_or_default();
     unsafe {
         let dictionary = (api.dictionary_create)();
         let yes = (api.boolean_create)(true);

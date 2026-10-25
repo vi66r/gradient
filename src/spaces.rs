@@ -168,20 +168,15 @@ impl Browser {
             .position(|candidate| candidate.id == *space)
     }
 
-    /// Sites allowed to notify, across the saved Spaces.
-    pub(crate) fn notification_sites(&self) -> Vec<String> {
-        let mut sites: Vec<String> = self
-            .spaces
-            .iter()
-            .filter(|space| !space.private)
-            .flat_map(|space| {
+    /// Tells the engine which sites each saved Space allows to notify.
+    pub(crate) fn sync_notification_sites(&self) {
+        for space in self.spaces.iter().filter(|space| !space.private) {
+            engine::set_notification_sites(
+                space.id,
                 self.permissions
-                    .sites(&space.id, crate::permissions::Kind::Notifications)
-            })
-            .collect();
-        sites.sort();
-        sites.dedup();
-        sites
+                    .sites(&space.id, crate::permissions::Kind::Notifications),
+            );
+        }
     }
 
     pub(crate) fn switch_space(
@@ -193,6 +188,7 @@ impl Browser {
         if index == self.space || index >= self.spaces.len() {
             return;
         }
+        let previous = self.space;
         self.end_find();
         self.renaming = false;
         for tab in &self.tabs {
@@ -220,7 +216,9 @@ impl Browser {
                 .push(Tab::new(id, START.into(), self.spaces[index].private));
         }
         self.active = incoming.active.min(self.tabs.len() - 1);
+        self.space_slide = if index > previous { 1. } else { -1. };
         self.space_epoch = self.space_epoch.wrapping_add(1);
+        self.space_scroll.scroll_to_item(index);
         self.activate(self.active, window, cx);
         // Parked pages may have started or stopped playing while away.
         let live: Vec<u64> = self
@@ -248,6 +246,44 @@ impl Browser {
         let count = self.spaces.len() as isize;
         let index = (self.space as isize + step).rem_euclid(count) as usize;
         self.switch_space(index, window, cx);
+    }
+
+    /// A two-finger sideways swipe over the tabs moves one Space, like
+    /// turning a page: fingers left for the next, right for the previous.
+    /// It stops at the ends instead of wrapping around.
+    pub(crate) fn space_swipe(
+        &mut self,
+        event: &gpui::ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui::{ScrollDelta, TouchPhase};
+        const DISTANCE: f32 = 90.;
+        match event.touch_phase {
+            TouchPhase::Started => self.swipe = Some(0.),
+            TouchPhase::Moved => {
+                let ScrollDelta::Pixels(delta) = event.delta else {
+                    return;
+                };
+                let Some(travel) = self.swipe.as_mut() else {
+                    return;
+                };
+                let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+                // Mostly sideways only; scrolling the tab list stays vertical.
+                if dx.abs() > dy.abs() * 1.5 {
+                    *travel += dx;
+                }
+                if travel.abs() >= DISTANCE {
+                    let step: isize = if *travel < 0. { 1 } else { -1 };
+                    self.swipe = None;
+                    let target = self.space as isize + step;
+                    if (0..self.spaces.len() as isize).contains(&target) {
+                        self.switch_space(target as usize, window, cx);
+                    }
+                }
+            }
+            _ => self.swipe = None,
+        }
     }
 
     /// Brings the Private Space on screen, opening it if needed.
@@ -554,7 +590,7 @@ impl Browser {
             self.notice = Some(format!("The Space’s history couldn’t be erased: {error}"));
         }
         self.forget_space_extensions(id, cx);
-        engine::set_notification_sites(self.notification_sites());
+        engine::set_notification_sites(id, Vec::new());
         let events = self.events.clone();
         cx.spawn(async move |_, cx| {
             // Give the pages' web processes a moment to let go of the store.
