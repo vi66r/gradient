@@ -32,5 +32,16 @@
       }
     ]
   },
-  "description": "Checks content scripts, background messaging and declarativeNetRequest in Browser's spike."
+  "description": "Checks content scripts, messaging, tabs, the toolbar action, popups, permission prompts and declarativeNetRequest in Browser.",
+  "action": {
+    "default_title": "Browser probe",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "32": "icon.png"
+    }
+  },
+  "optional_permissions": [
+    "clipboardWrite"
+  ]
 }

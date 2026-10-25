@@ -1,5 +1,13 @@
 <!doctype html><meta charset=utf-8><title>Extension fixture</title>
 <h1>Extension fixture</h1>
 <p id=status>waiting</p>
+<pre id=report>no extension yet</pre>
 <script src="/ads/ad.js"></script>
-<script>window.addEventListener('load',()=>{document.getElementById('status').dataset.ad = String(!!window.adLoaded);});</script>
+<script>
+window.addEventListener('load',()=>{document.getElementById('status').dataset.ad = String(!!window.adLoaded);});
+// Shows what the probe's content script recorded, for checks by eye.
+setInterval(() => {
+  const data = document.documentElement.dataset;
+  document.getElementById('report').textContent = `content: ${data.probe || 'none'}\nbackground: ${data.background || 'none'}\nad script loaded: ${!!window.adLoaded}`;
+}, 500);
+</script>

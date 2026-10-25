@@ -271,14 +271,17 @@ pub fn sync_extension_tabs<'a>(
         let Some(mtm) = objc2::MainThreadMarker::new() else {
             return;
         };
+        if !extensions::has_space(&space) {
+            return;
+        }
         let tabs = tabs
             .map(|tab| extensions::TabSnapshot {
                 id: tab.id,
                 view: tab
                     .page
                     .map(|page| objc2::rc::Retained::into_super(page.raw.webview())),
-                title: tab.title.to_string(),
-                url: tab.url.map(str::to_string),
+                title: tab.title,
+                url: tab.url,
                 loading: tab.loading,
             })
             .collect();
@@ -513,6 +516,7 @@ impl Host {
             private,
             profile,
             Some(objc2::Message::retain(configuration)),
+            None,
             self,
         ) {
             Ok(page) => page,
@@ -793,7 +797,16 @@ impl Page {
                 background: cx.background_executor().clone(),
                 parent: Parent::of(window)?,
             };
-            Self::build(id, private, profile, None, &host)?
+            // WebKit serves an extension's own pages (options, dashboards)
+            // only to views made from that extension's configuration.
+            let extension = if crate::model::is_extension_url(url) {
+                Some(extensions::page_configuration(profile, url).ok_or_else(|| {
+                    anyhow::anyhow!("the extension that owns it isn’t running in this Space.")
+                })?)
+            } else {
+                None
+            };
+            Self::build(id, private, profile, None, extension, &host)?
         };
         #[cfg(not(target_os = "macos"))]
         let page = {
@@ -833,13 +846,15 @@ impl Page {
 
     /// Builds a page's view. `opened` is WebKit's configuration for a page
     /// this one's opener asked for: WebKit loads it itself, and it shares the
-    /// opener's process, data store and content controller.
+    /// opener's process, data store and content controller. `extension` is
+    /// an extension context's configuration, for one of its own pages.
     #[cfg(target_os = "macos")]
     fn build(
         id: u64,
         private: bool,
         profile: [u8; 16],
         opened: Option<objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>>,
+        extension: Option<objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>>,
         host: &Host,
     ) -> anyhow::Result<Rc<Self>> {
         use wry::{WebViewBuilderExtMacos, WebViewExtMacOS};
@@ -847,7 +862,9 @@ impl Page {
         let dropped = protection::Dropped::default();
         let drop_record = dropped.clone();
         let inherited = opened.is_some();
-        let configuration = opened.unwrap_or_else(|| page_configuration(private, profile));
+        let configuration = opened
+            .or(extension)
+            .unwrap_or_else(|| page_configuration(private, profile));
         let raw = handlers(
             wry::WebViewBuilder::new(),
             id,

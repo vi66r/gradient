@@ -82,11 +82,11 @@ pub struct Shell {
 }
 
 /// A tab as the shell describes it to extensions.
-pub struct TabSnapshot {
+pub struct TabSnapshot<'a> {
     pub id: u64,
     pub view: Option<Retained<WKWebView>>,
-    pub title: String,
-    pub url: Option<String>,
+    pub title: &'a str,
+    pub url: Option<&'a str>,
     pub loading: bool,
 }
 
@@ -126,6 +126,11 @@ thread_local! {
     static ANCHORS: RefCell<HashMap<String, NSRect>> = RefCell::new(HashMap::new());
     /// Encoded action icons, by install and the image WebKit returned.
     static ICONS: RefCell<IconCache> = RefCell::new(HashMap::new());
+}
+
+/// Whether a Space has an extension controller (any of its pages exist).
+pub fn has_space(id: &[u8; 16]) -> bool {
+    SPACES.with_borrow(|spaces| spaces.contains_key(id))
 }
 
 /// Whether this macOS has WebKit's extension API.
@@ -492,6 +497,35 @@ define_class!(
 );
 
 impl ExtensionTab {
+    /// Takes the shell's view of the tab; returns what changed.
+    fn update(&self, snapshot: TabSnapshot) -> WKWebExtensionTabChangedProperties {
+        let mut properties = WKWebExtensionTabChangedProperties::None;
+        let mut state = self.ivars().state.borrow_mut();
+        let same_view = match (&state.view, &snapshot.view) {
+            (Some(old), Some(new)) => Retained::as_ptr(old) == Retained::as_ptr(new),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_view {
+            state.view = snapshot.view;
+            properties |= WKWebExtensionTabChangedProperties::Loading
+                | WKWebExtensionTabChangedProperties::URL;
+        }
+        if state.title != snapshot.title {
+            state.title = snapshot.title.to_string();
+            properties |= WKWebExtensionTabChangedProperties::Title;
+        }
+        if state.url.as_deref() != snapshot.url {
+            state.url = snapshot.url.map(str::to_string);
+            properties |= WKWebExtensionTabChangedProperties::URL;
+        }
+        if state.loading != snapshot.loading {
+            state.loading = snapshot.loading;
+            properties |= WKWebExtensionTabChangedProperties::Loading;
+        }
+        properties
+    }
+
     fn new(id: u64, space: [u8; 16], mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(TabIvars {
             id,
@@ -894,6 +928,18 @@ fn ensure(
     space
 }
 
+/// The configuration for a tab showing one of an extension's own pages.
+/// `None` when no running extension in the Space owns the URL.
+pub fn page_configuration(
+    profile: [u8; 16],
+    url: &str,
+) -> Option<Retained<WKWebViewConfiguration>> {
+    let space = space(&profile)?;
+    let url = NSURL::URLWithString(&NSString::from_str(url))?;
+    let context = unsafe { space.controller.extensionContextForURL(&url) }?;
+    unsafe { context.webViewConfiguration() }
+}
+
 /// Joins a page to its Space's controller.
 pub fn attach(
     configuration: &WKWebViewConfiguration,
@@ -971,9 +1017,16 @@ fn order(space: &Space) {
     });
 }
 
+/// An extension folder's URL. WebKit hits an assertion (and the app stops)
+/// reading an extension from a relative file URL, which a relative
+/// `BROWSER_DATA_DIR` would produce.
+fn folder_url(dir: &std::path::Path) -> Retained<NSURL> {
+    let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&dir.to_string_lossy()), true)
+}
+
 fn load(space: &Rc<Space>, spec: ExtensionSpec, mtm: MainThreadMarker) {
-    let url =
-        NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&spec.dir.to_string_lossy()), true);
+    let url = folder_url(&spec.dir);
     let weak = Rc::downgrade(space);
     let done = RcBlock::new(
         move |extension: *mut WKWebExtension, failure: *mut NSError| {
@@ -1085,7 +1138,7 @@ pub fn inspect(
         let _ = send.try_send(Err("Extensions need macOS 15.4 or later.".into()));
         return receive;
     }
-    let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&dir.to_string_lossy()), true);
+    let url = folder_url(dir);
     let done = RcBlock::new(
         move |extension: *mut WKWebExtension, failure: *mut NSError| {
             let result = match unsafe { extension.as_ref() } {
@@ -1137,50 +1190,37 @@ pub fn sync_tabs(id: [u8; 16], tabs: Vec<TabSnapshot>, active: Option<u64>, mtm:
     };
     let mut opened = Vec::new();
     let mut changed = Vec::new();
-    let closed: Vec<Retained<ExtensionTab>>;
+    let mut closed: Vec<Retained<ExtensionTab>> = Vec::new();
     {
         let mut current = space.tabs.borrow_mut();
-        let mut previous: HashMap<u64, Retained<ExtensionTab>> =
-            current.drain(..).map(|tab| (tab.ivars().id, tab)).collect();
-        for snapshot in tabs {
-            let (tab, new) = match previous.remove(&snapshot.id) {
-                Some(tab) => (tab, false),
-                None => (ExtensionTab::new(snapshot.id, id, mtm), true),
-            };
-            let mut properties = WKWebExtensionTabChangedProperties::None;
-            {
-                let mut state = tab.ivars().state.borrow_mut();
-                let same_view = match (&state.view, &snapshot.view) {
-                    (Some(old), Some(new)) => Retained::as_ptr(old) == Retained::as_ptr(new),
-                    (None, None) => true,
-                    _ => false,
-                };
-                if !same_view {
-                    state.view = snapshot.view;
-                    properties |= WKWebExtensionTabChangedProperties::Loading
-                        | WKWebExtensionTabChangedProperties::URL;
-                }
-                if state.title != snapshot.title {
-                    state.title = snapshot.title;
-                    properties |= WKWebExtensionTabChangedProperties::Title;
-                }
-                if state.url != snapshot.url {
-                    state.url = snapshot.url;
-                    properties |= WKWebExtensionTabChangedProperties::URL;
-                }
-                if state.loading != snapshot.loading {
-                    state.loading = snapshot.loading;
-                    properties |= WKWebExtensionTabChangedProperties::Loading;
-                }
+        // Usually nothing was added, closed or moved: update in place.
+        let same = current.len() == tabs.len()
+            && current
+                .iter()
+                .zip(&tabs)
+                .all(|(tab, snapshot)| tab.ivars().id == snapshot.id);
+        if !same {
+            let mut previous: HashMap<u64, Retained<ExtensionTab>> =
+                current.drain(..).map(|tab| (tab.ivars().id, tab)).collect();
+            for snapshot in &tabs {
+                let tab = previous.remove(&snapshot.id).unwrap_or_else(|| {
+                    let tab = ExtensionTab::new(snapshot.id, id, mtm);
+                    opened.push(tab.clone());
+                    tab
+                });
+                current.push(tab);
             }
-            if new {
-                opened.push(tab.clone());
-            } else if !properties.is_empty() {
+            closed = previous.into_values().collect();
+        }
+        for (tab, snapshot) in current.iter().zip(tabs) {
+            let properties = tab.update(snapshot);
+            let new = opened
+                .iter()
+                .any(|opened| opened.ivars().id == tab.ivars().id);
+            if !new && !properties.is_empty() {
                 changed.push((tab.clone(), properties));
             }
-            current.push(tab);
         }
-        closed = previous.into_values().collect();
     }
     let before = space.active.replace(active);
     let previous_active = before.and_then(|before| {

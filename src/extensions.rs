@@ -277,10 +277,8 @@ pub(crate) fn stage(source: &Path, root: &Path) -> Result<Staged> {
             && let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&text)
             && adjust_manifest(&mut value)
         {
-            let name = value
-                .get("name")
-                .and_then(|name| name.as_str())
-                .unwrap_or("");
+            // The manifest's name may be a locale key; the folder reads better.
+            let name = source.file_name().unwrap_or_default().to_string_lossy();
             log::warn!(
                 "Dropped {HOST_ACCESS} from {name}'s manifest: WebKit ignores its blocking rules with that permission and a toolbar action. Its redirect rules won't apply."
             );
@@ -1019,7 +1017,11 @@ impl Browser {
                     .unwrap_or_else(|| "An extension".into());
                 self.notice = Some(format!("“{name}” couldn’t start. {error}"));
             }
-            Loaded { .. } | ActionsChanged => self.refresh_extension_actions(),
+            Loaded { space, .. } => {
+                self.refresh_extension_actions();
+                self.retry_extension_pages(space, window, cx);
+            }
+            ActionsChanged => self.refresh_extension_actions(),
             OpenTab {
                 space,
                 url,
@@ -1089,6 +1091,35 @@ impl Browser {
         cx.notify();
     }
 
+    /// Tabs restored on an extension's own page (its dashboard) open before
+    /// the extension has started; once it has, they load.
+    fn retry_extension_pages(
+        &mut self,
+        space: [u8; 16],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let waiting = |tab: &crate::Tab| {
+            tab.page.is_none()
+                && tab.error.is_some()
+                && crate::model::is_extension_url(&tab.saved.url)
+        };
+        if space == self.current_space().id {
+            for tab in self.tabs.iter_mut().filter(|tab| waiting(tab)) {
+                tab.error = None;
+            }
+            if self.tabs[self.active].page.is_none()
+                && crate::model::is_extension_url(&self.tabs[self.active].saved.url)
+            {
+                self.ensure_page(self.active, window, cx);
+            }
+        } else if let Some(parked) = self.parked.get_mut(&space) {
+            for tab in parked.tabs.iter_mut().filter(|tab| waiting(tab)) {
+                tab.error = None;
+            }
+        }
+    }
+
     /// `tabs.create`: opens in the extension's Space, on top; in front only
     /// when asked and the Space is on screen.
     fn open_extension_tab(
@@ -1151,6 +1182,13 @@ impl Browser {
             return;
         };
         match &tab.page {
+            // An extension's own page needs a view made for it; it loads
+            // when the tab is next shown.
+            Some(_) if crate::model::is_extension_url(&url) => {
+                tab.page = None;
+                tab.saved.title = crate::model::display_host(&url);
+                tab.saved.url = url;
+            }
             Some(page) => {
                 if let Err(error) = page.load_url(&url) {
                     log::warn!("An extension's navigation: {error}");

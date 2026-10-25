@@ -904,6 +904,10 @@ impl Browser {
         self.notice = None;
         let tab = &mut self.tabs[self.active];
         tab.error = None;
+        // An extension's own page needs a view made for it.
+        if model::is_extension_url(&url) {
+            tab.page = None;
+        }
         if url != START
             && let Some(page) = &tab.page
         {

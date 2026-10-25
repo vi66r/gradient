@@ -1,5 +1,7 @@
 # Web extensions spike (2026-10-25)
 
+The real implementation that followed is described in docs/extensions.md.
+
 Question: can Browser run real web extensions through WebKit's public
 `WKWebExtension` API (macOS 15.4+), and does that solve content blocking and
 password managers? Tested on macOS 26.6.2 with a standalone Objective-C harness
@@ -98,12 +100,17 @@ password managers? Tested on macOS 26.6.2 with a standalone Objective-C harness
 
 ## Reproducing
 
+Pass absolute extension paths: WebKit stops the app on a failed assertion if
+it reads an extension from a relative file URL. The `ubol-fresh` copy used
+during the spike is a stripped variant (no background, three rulesets); use
+uBOL's release zip for anything beyond network blocking.
+
 ```
 clang -fobjc-arc -framework AppKit -framework WebKit scripts/extension-harness.m -o /tmp/extension-harness
 python3 -m http.server 8773 --bind 127.0.0.1 --directory fixtures/extensions/site
-/tmp/extension-harness http://127.0.0.1:8773/ 5 fixtures/extensions/probe
+/tmp/extension-harness http://127.0.0.1:8773/ 5 "$PWD/fixtures/extensions/probe"
 HARNESS_WARMUP=12 /tmp/extension-harness http://127.0.0.1:8773/ads.html 4 path/to/uBOL
 ```
 
-In Browser: `BROWSER_EXTENSIONS=/path/one:/path/two RUST_LOG=warn` (unpacked
-folders; grants everything requested).
+In Browser: Tools ▸ Add Extension… (the spike's `BROWSER_EXTENSIONS` variable
+is gone).
