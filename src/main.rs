@@ -271,6 +271,9 @@ struct Browser {
     /// The current Space's toolbar buttons for the tab in front.
     extension_actions: Vec<extensions::ActionButton>,
     extension_anchors: extensions::Anchors,
+    /// Where the selected tab's cell meets the page card, measured as the
+    /// sidebar lays out; see `ui::TabJoin`.
+    tab_join: ui::TabJoins,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -433,6 +436,7 @@ impl Browser {
             extensions: installed,
             extension_actions: Vec::new(),
             extension_anchors: Default::default(),
+            tab_join: Default::default(),
             _subscriptions: vec![
                 address_events,
                 find_events,
