@@ -32,8 +32,6 @@ use std::{cell::Cell, ffi::c_void};
 
 /// Height of the page edge Browser samples, in points.
 const EDGE: f64 = 8.;
-/// Width of the left-edge column sampled beside the selected tab.
-const SIDE: f64 = 4.;
 
 const OBSERVED: [&str; 3] = [
     "_sampledPageTopColor",
@@ -138,47 +136,6 @@ impl Theme {
             let color = unsafe { image.as_ref() }.and_then(uniform);
             observer.ivars().sampled.set(color);
             observer.report();
-        });
-        unsafe {
-            self.view
-                .takeSnapshotWithConfiguration_completionHandler(Some(&config), &done)
-        };
-    }
-}
-
-impl Theme {
-    /// Samples a thin column at the page's left edge between `top` and
-    /// `bottom` (points from the page's top), where the selected tab's cell
-    /// meets it; the result arrives as `Event::SideColor`.
-    pub fn sample_side(&self, top: f64, bottom: f64) {
-        let Some(mtm) = MainThreadMarker::new() else {
-            return;
-        };
-        let bounds = self.view.bounds();
-        let (top, bottom) = (top.max(0.), bottom.min(bounds.size.height));
-        if bottom - top < 4. || bounds.size.width < 2. * SIDE {
-            return;
-        }
-        let y = if self.view.isFlipped() {
-            top
-        } else {
-            bounds.size.height - bottom
-        };
-        let config = unsafe { WKSnapshotConfiguration::new(mtm) };
-        unsafe {
-            config.setRect(NSRect::new(
-                NSPoint::new(0., y),
-                NSSize::new(SIDE, bottom - top),
-            ));
-            config.setSnapshotWidth(Some(&NSNumber::new_f64(SIDE)));
-        }
-        let (id, events) = (
-            self.observer.ivars().id,
-            self.observer.ivars().events.clone(),
-        );
-        let done = RcBlock::new(move |image: *mut NSImage, _: *mut NSError| {
-            let color = unsafe { image.as_ref() }.and_then(uniform);
-            let _ = events.try_send(Event::SideColor(id, color));
         });
         unsafe {
             self.view

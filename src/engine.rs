@@ -16,12 +16,6 @@ pub enum Event {
     PageTint(u64, Option<u32>, bool),
     /// A new document's first visually non-empty layout.
     Painted(u64),
-    /// The color at the page's left edge beside the selected tab's cell
-    /// (`Page::sample_side`), or `None` when it isn't one color.
-    SideColor(u64, Option<u32>),
-    /// The user scrolled or typed somewhere in the app, which may have moved
-    /// the page's content (`watch_page_input`).
-    PageInput,
     /// Find-in-page matches for `query` in a page.
     FindMatches {
         id: u64,
@@ -1022,15 +1016,6 @@ impl Page {
         self._theme.sample();
     }
 
-    /// Samples the page's left edge between `top` and `bottom`, in points
-    /// from the page's top (`Event::SideColor`).
-    pub fn sample_side(&self, top: f64, bottom: f64) {
-        #[cfg(target_os = "macos")]
-        self._theme.sample_side(top, bottom);
-        #[cfg(not(target_os = "macos"))]
-        let _ = (top, bottom);
-    }
-
     /// A new document committed: hold the page out of sight until
     /// `fade_in`; the host's color (the page's) stands in.
     pub fn hold(&self) {
@@ -1194,11 +1179,6 @@ impl Page {
         }
     }
 
-    /// Where the page sits, in window coordinates.
-    pub fn bounds(&self) -> Bounds<Pixels> {
-        self.bounds.get()
-    }
-
     pub fn contains(&self, point: Point<Pixels>) -> bool {
         self.visible.get() && self.bounds.get().contains(&point)
     }
@@ -1300,39 +1280,6 @@ pub fn watch_native_clicks(events: Sender<Event>) {
     // The monitor lives as long as the app; AppKit copies the handler.
     let monitor = unsafe {
         NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::LeftMouseDown, &handler)
-    };
-    std::mem::forget(monitor);
-}
-
-#[cfg(target_os = "macos")]
-static INPUT_REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// The shell took the last `Event::PageInput`; report the next.
-pub fn page_input_seen() {
-    #[cfg(target_os = "macos")]
-    INPUT_REPORTED.store(false, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// Scrolling and typing reach the page without GPUI seeing them, and either
-/// can move its content. Report them so the shell can resample what it
-/// matches to the page (`Page::sample_side`).
-#[cfg(target_os = "macos")]
-pub fn watch_page_input(events: Sender<Event>) {
-    use objc2_app_kit::{NSEvent, NSEventMask};
-    use std::ptr::NonNull;
-    let handler = block2::RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
-        // One report until the shell takes it: a momentum scroll sends a
-        // hundred events a second, which mustn't crowd out the rest.
-        if !INPUT_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            let _ = events.try_send(Event::PageInput);
-        }
-        event.as_ptr()
-    });
-    let monitor = unsafe {
-        NSEvent::addLocalMonitorForEventsMatchingMask_handler(
-            NSEventMask::ScrollWheel | NSEventMask::KeyDown,
-            &handler,
-        )
     };
     std::mem::forget(monitor);
 }

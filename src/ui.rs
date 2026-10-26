@@ -55,8 +55,6 @@ pub(crate) fn palette(dark: bool) -> Palette {
 }
 
 const SIDEBAR: f32 = 248.;
-/// The tab list's side inset (`px_2`).
-const TAB_LIST_INSET: f32 = 8.;
 /// Matches the native page host's corner radius in engine.rs.
 /// The page card sits below the toolbar and runs flush to the window's right
 /// and bottom edges. Its top corners and its sidebar-facing bottom corner are
@@ -78,30 +76,6 @@ const FIND_BAR: f32 = 264.;
 const R_LIST: f32 = 14.;
 const FAST: Duration = Duration::from_millis(140);
 const NORMAL: Duration = Duration::from_millis(200);
-
-/// Where the selected tab's cell meets the page card. The sidebar records it
-/// as it lays out, and the shell paints the join over the card's edge later
-/// in the same frame (`paint_tab_joins`).
-#[derive(Default)]
-pub(crate) struct TabJoin {
-    /// The tab list's visible area; joins are clipped to it.
-    list: Option<Bounds<Pixels>>,
-    /// Each joined cell: its tab, bounds, how joined it is (0 to 1) and the
-    /// color where it meets the page. The selected tab's, and the last one's
-    /// while it lets go.
-    cells: Vec<(u64, Bounds<Pixels>, f32, Hsla)>,
-}
-
-impl TabJoin {
-    pub(crate) fn cell(&self, id: u64) -> Option<Bounds<Pixels>> {
-        self.cells
-            .iter()
-            .find(|(tab, ..)| *tab == id)
-            .map(|(_, bounds, ..)| *bounds)
-    }
-}
-
-pub(crate) type TabJoins = std::rc::Rc<std::cell::RefCell<TabJoin>>;
 
 fn hsla(color: u32) -> Hsla {
     rgb(color).into()
@@ -127,124 +101,19 @@ impl Browser {
             )
             .child(
                 div()
+                    .id("tab-list")
                     .flex_1()
                     .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .relative()
-                    .child(self.tab_list(p, window, cx))
-                    // The list's visible area, which the tab join is clipped to.
-                    .child({
-                        let join = self.tab_join.clone();
-                        canvas(
-                            move |bounds, _, _| join.borrow_mut().list = Some(bounds),
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full()
-                    }),
-            )
-            // The footer: downloads, when there are any, then the tools.
-            // Tools: Request Lab as a labeled row (discoverable, shows when
-            // it's open), and agent sharing as a state toggle beside it.
-            .child(self.sidebar_footer(p, grant, window, cx))
-            // Spaces, at the bottom, in a section of their own.
-            .child(self.space_switcher(p, cx))
-            .into_any_element()
-    }
-
-    fn tab_list(
-        &self,
-        p: Palette,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        div()
-            .id("tab-list")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px_2()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(
-                div()
-                    .id("new-tab")
-                    .role(Role::Button)
-                    .aria_label("Open New Tab")
-                    .h(px(32.))
+                    .overflow_y_scroll()
                     .px_2()
                     .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded(px(R_CONTROL))
-                    .cursor_pointer()
-                    .text_size(px(13.))
-                    .text_color(rgb(p.muted))
-                    .hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
-                    .child(Icon::new(IconName::Plus).size_4())
-                    .child("Open New Tab")
-                    .on_click(
-                        cx.listener(|this, _, w, cx| this.new_tab(START.into(), false, w, cx)),
-                    ),
-            )
-            .children((0..self.tabs.len()).map(|index| self.tab_row(index, p, window, cx)))
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
-                this.space_swipe(event, window, cx)
-            }))
-            // A Space's tabs arrive together, like a page does, sliding
-            // in from the side the Space sits on.
-            .relative()
-            .with_animation(
-                ("space-tabs", self.space_epoch),
-                Animation::new(NORMAL).with_easing(ease_out_quint()),
-                {
-                    let slide = self.space_slide;
-                    move |list, delta| {
-                        list.opacity(0.35 + 0.65 * delta)
-                            .left(px(16. * slide * (1. - delta)))
-                    }
-                },
-            )
-    }
-
-    fn sidebar_footer(
-        &self,
-        p: Palette,
-        grant: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        div()
-            .flex_shrink_0()
-            .mx_2()
-            .mb_1()
-            .pt_2()
-            .border_t_1()
-            .border_color(rgba(if self.dark { 0xffffff14 } else { 0x0f172a14 }))
-            .flex()
-            .flex_col()
-            .gap_1()
-            .children(
-                self.downloads
-                    .iter()
-                    .map(|download| self.download_row(download, p, window, cx)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
+                    .flex_col()
                     .gap_1()
                     .child(
                         div()
-                            .id("request-lab")
+                            .id("new-tab")
                             .role(Role::Button)
-                            .aria_label("Request lab")
-                            .aria_selected(self.lab)
-                            .flex_1()
+                            .aria_label("Open New Tab")
                             .h(px(32.))
                             .px_2()
                             .flex()
@@ -253,34 +122,104 @@ impl Browser {
                             .rounded(px(R_CONTROL))
                             .cursor_pointer()
                             .text_size(px(13.))
-                            .text_color(rgb(if self.lab { p.ink } else { p.muted }))
-                            .when(self.lab, |d| d.bg(rgb(p.selected)).shadow_xs())
-                            .when(!self.lab, |d| {
-                                d.hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
-                            })
-                            .child(Icon::new(IconName::Terminal).size_4())
-                            .child("Request Lab")
-                            .on_click(cx.listener(|this, _, w, cx| this.show_lab(w, cx))),
+                            .text_color(rgb(p.muted))
+                            .hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
+                            .child(Icon::new(IconName::Plus).size_4())
+                            .child("Open New Tab")
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                this.new_tab(START.into(), false, w, cx)
+                            })),
                     )
-                    .child(
-                        icon_button(
-                            "agent-access",
-                            if grant {
-                                "Agents can see this tab. Click to revoke."
-                            } else {
-                                "Share this tab with agents"
-                            },
-                            IconName::Bot,
-                            p,
-                        )
-                        .size(px(32.))
-                        .rounded(px(R_CONTROL))
-                        .when(grant, |d| {
-                            d.bg(rgba((p.accent << 8) | 0x24)).text_color(rgb(p.accent))
-                        })
-                        .on_click(cx.listener(|this, _, w, cx| this.toggle_agent(w, cx))),
+                    .children((0..self.tabs.len()).map(|index| self.tab_row(index, p, window, cx)))
+                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                        this.space_swipe(event, window, cx)
+                    }))
+                    // A Space's tabs arrive together, like a page does, sliding
+                    // in from the side the Space sits on.
+                    .relative()
+                    .with_animation(
+                        ("space-tabs", self.space_epoch),
+                        Animation::new(NORMAL).with_easing(ease_out_quint()),
+                        {
+                            let slide = self.space_slide;
+                            move |list, delta| {
+                                list.opacity(0.35 + 0.65 * delta)
+                                    .left(px(16. * slide * (1. - delta)))
+                            }
+                        },
                     ),
             )
+            // Spaces, below the tabs, in a section of their own.
+            .child(self.space_switcher(p, cx))
+            // The footer: downloads, when there are any, then the tools.
+            // Tools: Request Lab as a labeled row (discoverable, shows when
+            // it's open), and agent sharing as a state toggle beside it.
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .mx_2()
+                    .mb_2()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(rgba(if self.dark { 0xffffff14 } else { 0x0f172a14 }))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .children(
+                        self.downloads
+                            .iter()
+                            .map(|download| self.download_row(download, p, window, cx)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .id("request-lab")
+                                    .role(Role::Button)
+                                    .aria_label("Request lab")
+                                    .aria_selected(self.lab)
+                                    .flex_1()
+                                    .h(px(32.))
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .rounded(px(R_CONTROL))
+                                    .cursor_pointer()
+                                    .text_size(px(13.))
+                                    .text_color(rgb(if self.lab { p.ink } else { p.muted }))
+                                    .when(self.lab, |d| d.bg(rgb(p.selected)).shadow_xs())
+                                    .when(!self.lab, |d| {
+                                        d.hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
+                                    })
+                                    .child(Icon::new(IconName::Terminal).size_4())
+                                    .child("Request Lab")
+                                    .on_click(cx.listener(|this, _, w, cx| this.show_lab(w, cx))),
+                            )
+                            .child(
+                                icon_button(
+                                    "agent-access",
+                                    if grant {
+                                        "Agents can see this tab. Click to revoke."
+                                    } else {
+                                        "Share this tab with agents"
+                                    },
+                                    IconName::Bot,
+                                    p,
+                                )
+                                .size(px(32.))
+                                .rounded(px(R_CONTROL))
+                                .when(grant, |d| {
+                                    d.bg(rgba((p.accent << 8) | 0x24)).text_color(rgb(p.accent))
+                                })
+                                .on_click(cx.listener(|this, _, w, cx| this.toggle_agent(w, cx))),
+                            ),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// A download, shaped like the Request Lab row beneath it: the file's name
@@ -457,7 +396,7 @@ impl Browser {
             .children(bar)
     }
 
-    /// Spaces as a row of chips at the bottom of the sidebar: each with its color and name,
+    /// Spaces as a row of chips between the tabs and the tools: each with its color and name,
     /// the current one filled, and a button for a new one at the end. When
     /// the names don't all fit, the other Spaces shrink to their color dots
     /// (named in a tooltip); past that the row scrolls sideways. Right-click
@@ -571,8 +510,7 @@ impl Browser {
             .id("spaces")
             .flex_shrink_0()
             .px_2()
-            .pt_1()
-            .pb_2()
+            .py_1()
             .flex()
             .items_center()
             .gap_1()
@@ -648,42 +586,13 @@ impl Browser {
     ) -> impl IntoElement + use<> {
         let tab = &self.tabs[index];
         let selected = index == self.active && !self.lab;
-        // The selected cell is part of the page card: its color, and joined
-        // to it (`TabJoin`). The join eases in and out with the color.
         let background = motion::transition(
             format!("tab-bg-{}", tab.id),
-            hsla(if selected { p.card } else { p.chrome }),
+            hsla(if selected { p.selected } else { p.chrome }),
             Transition::new(NORMAL),
             window,
             cx,
         );
-        let joined = motion::transition(
-            format!("tab-join-{}", tab.id),
-            if selected { 1. } else { 0. },
-            Transition::new(NORMAL),
-            window,
-            cx,
-        );
-        // Where it meets the page, the selected cell takes the page's own
-        // color there, blending from the card's across its width.
-        let side = tab
-            .side
-            .filter(|_| selected && tab.page.is_some() && !self.lab);
-        // Eased when the page changes color; while it's scrolling, the
-        // color follows each frame's sample instead of trailing it.
-        let side_color: Hsla = motion::transition(
-            format!("tab-side-{}", tab.id),
-            Rgb::from(side.unwrap_or(p.card)),
-            Transition::new(if self.side_live_until.is_some() {
-                Duration::ZERO
-            } else {
-                NORMAL
-            }),
-            window,
-            cx,
-        )
-        .into();
-        let close_ink = side.map_or(p.muted, readable_on);
         let title: SharedString = if tab.saved.title.is_empty() {
             model::display_host(&tab.saved.url).into()
         } else {
@@ -849,7 +758,7 @@ impl Browser {
                     .items_center()
                     .justify_center()
                     .rounded(px(R_CONTROL - 4.))
-                    .text_color(rgb(close_ink))
+                    .text_color(rgb(p.muted))
                     .when(!selected, |d| {
                         d.opacity(0.).group_hover(group.clone(), |s| s.opacity(1.))
                     })
@@ -869,43 +778,13 @@ impl Browser {
             .flex_shrink_0()
             .flex()
             .flex_col()
-            .relative()
+            .rounded(px(R_CONTROL))
             .cursor_pointer()
-            .when(!selected, |d| d.bg(background))
-            .when(selected, |d| {
-                d.bg(linear_gradient(
-                    90.,
-                    linear_color_stop(background, 0.72),
-                    linear_color_stop(side_color, 0.97),
-                ))
-            })
-            // Joined: square on the card's side, and reaching through the
-            // list's inset to the card's edge.
-            .when(selected, |d| {
-                d.rounded_l(px(R_CONTROL)).mr(px(-TAB_LIST_INSET))
-            })
-            .when(!selected, |d| {
-                d.rounded(px(R_CONTROL)).hover(|s| s.bg(rgb(p.hover)))
-            })
+            .bg(background)
+            .when(selected, |d| d.shadow_xs())
+            .when(!selected, |d| d.hover(|s| s.bg(rgb(p.hover))))
             .child(header)
             .children(strip)
-            .when(joined > 0.001, |d| {
-                let join = self.tab_join.clone();
-                d.child(
-                    canvas(
-                        move |bounds, _, _| {
-                            join.borrow_mut()
-                                .cells
-                                .push((id, bounds, joined, side_color))
-                        },
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full(),
-                )
-            })
             .on_click(cx.listener(move |this, _, w, cx| this.activate(index, w, cx)))
             // Acts on this tab without switching to it, as in Safari.
             .on_mouse_down(
@@ -1253,19 +1132,6 @@ impl Render for Browser {
         // Every change to the tabs ends in a render, so extensions hear of
         // them here; unchanged tabs cost a comparison.
         self.sync_extension_tabs();
-        // The page beside the selected cell is sampled again whenever the
-        // cell or the page moved since (last frame's layout).
-        let active = &self.tabs[self.active];
-        let placed = self
-            .tab_join
-            .borrow()
-            .cell(active.id)
-            .zip(active.page.as_ref().map(|page| page.bounds()))
-            .map(|(cell, page)| (active.id, cell, page));
-        if placed.is_some() && placed != self.side_sampled {
-            self.request_side_sample(cx);
-        }
-        *self.tab_join.borrow_mut() = TabJoin::default();
         let p = palette(self.dark);
         let reveal = motion::transition(
             "suggestions",
@@ -1427,23 +1293,6 @@ impl Render for Browser {
             .on_action(cx.listener(|this, action: &SetSearchEngine, _, cx| {
                 this.set_search_engine(action.engine, cx)
             }))
-            // The card's shadow, left out across a joined tab cell's rows: the
-            // cell is part of the card there.
-            .child({
-                let join = self.tab_join.clone();
-                let dark = self.dark;
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, _| {
-                        paint_card_shadow(bounds, &join.borrow(), dark, window)
-                    },
-                )
-                .absolute()
-                .top(px(CONTROL_ZONE))
-                .left(px(SIDEBAR))
-                .right_0()
-                .bottom_0()
-            })
             .child(self.sidebar(window, cx))
             .child(
                 div()
@@ -1467,6 +1316,7 @@ impl Render for Browser {
                             .border_l_1()
                             .border_t_1()
                             .border_color(panel_edge(self.dark))
+                            .shadow(panel_shadow(self.dark))
                             .child(body)
                             .children(self.suggestion_list(p, reveal, cx))
                             .when_some(self.notice.clone(), |d, message| {
@@ -1512,144 +1362,7 @@ impl Render for Browser {
                             }),
                     ),
             )
-            .child({
-                let join = self.tab_join.clone();
-                // The card's outline as it looks: its hairline over the
-                // card's color. Opaque, so it reads the same over a join in
-                // the page's color as along the card.
-                let outline = over(panel_edge(self.dark), hsla(p.card));
-                canvas(
-                    |_, _, _| {},
-                    move |_, _, window, _| paint_tab_joins(&join.borrow(), outline, window),
-                )
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-            })
     }
-}
-
-/// The card's shadow, in bands above and below each joined tab cell.
-fn paint_card_shadow(card: Bounds<Pixels>, join: &TabJoin, dark: bool, window: &mut Window) {
-    let radius = px(CARD_RADIUS);
-    let corners = Corners {
-        top_left: radius,
-        top_right: radius,
-        bottom_right: px(0.),
-        bottom_left: radius,
-    };
-    let shadows = panel_shadow(dark);
-    let viewport = window.viewport_size();
-    let mut gaps: Vec<_> = join
-        .cells
-        .iter()
-        .map(|(_, cell, ..)| (cell.top(), cell.bottom()))
-        .collect();
-    gaps.sort_by(|a, b| f32::from(a.0).total_cmp(&f32::from(b.0)));
-    let mut from = px(0.);
-    for (top, bottom) in gaps.into_iter().chain([(viewport.height, viewport.height)]) {
-        if top > from {
-            let band = ContentMask {
-                bounds: Bounds::from_corners(point(px(0.), from), point(viewport.width, top)),
-            };
-            window.with_content_mask(Some(band), |window| {
-                window.paint_drop_shadows(card, corners, &shadows)
-            });
-        }
-        from = from.max(bottom);
-    }
-}
-
-/// Joins the selected tab's cell to the page card, as a classic tab joins
-/// its page: the card's edge hairline is covered where the cell meets it,
-/// concave curves above and below run the cell into the card's edge, and
-/// the card's outline runs on around the curves and the cell.
-fn paint_tab_joins(join: &TabJoin, outline: Hsla, window: &mut Window) {
-    let Some(list) = join.list else {
-        return;
-    };
-    let edge = px(SIDEBAR);
-    let r = px(R_CONTROL);
-    // A quarter circle as a cubic Bézier.
-    let k = r * 0.5523;
-    let mask = ContentMask {
-        bounds: Bounds::from_corners(
-            point(px(0.), list.top()),
-            point(edge + px(2.), list.bottom()),
-        ),
-    };
-    window.with_content_mask(Some(mask), |window| {
-        for (_, cell, joined, color) in &join.cells {
-            let (top, bottom) = (cell.top(), cell.bottom());
-            let mut path = PathBuilder::fill();
-            path.move_to(point(edge - r, top));
-            path.cubic_bezier_to(
-                point(edge, top - r),
-                point(edge - r + k, top),
-                point(edge, top - r + k),
-            );
-            path.line_to(point(edge + px(1.), top - r));
-            path.line_to(point(edge + px(1.), bottom + r));
-            path.line_to(point(edge, bottom + r));
-            path.cubic_bezier_to(
-                point(edge - r, bottom),
-                point(edge, bottom + r - k),
-                point(edge - r + k, bottom),
-            );
-            path.line_to(point(edge - px(1.), bottom));
-            path.line_to(point(edge - px(1.), top));
-            path.close();
-            if let Ok(path) = path.build() {
-                window.paint_path(path, color.opacity(*joined));
-            }
-            if let Ok(path) = tab_outline(*cell, edge, r).build() {
-                window.paint_path(path, outline.opacity(*joined));
-            }
-        }
-    });
-}
-
-/// The card's 1 pt outline continued around a joined cell: from the card's
-/// edge, around the upper curve, along the cell's top, around its rounded
-/// end and back along the bottom and the lower curve to the card's edge.
-/// Like the card's own border, it runs half a point inside the shape.
-fn tab_outline(cell: Bounds<Pixels>, edge: Pixels, r: Pixels) -> PathBuilder {
-    let half = px(0.5);
-    let (top, bottom, left) = (cell.top(), cell.bottom(), cell.left());
-    // Quarter circles as cubic Béziers.
-    let k = 0.5523;
-    // The curves into the card, around centers outside the shape.
-    let big = r + half;
-    // The cell's rounded end, inside it.
-    let end = px(R_CONTROL);
-    let small = end - half;
-    let mut path = PathBuilder::stroke(px(1.));
-    path.move_to(point(edge + half, top - r));
-    path.cubic_bezier_to(
-        point(edge - r, top + half),
-        point(edge + half, top - r + big * k),
-        point(edge - r + big * k, top + half),
-    );
-    path.line_to(point(left + end, top + half));
-    path.cubic_bezier_to(
-        point(left + half, top + end),
-        point(left + end - small * k, top + half),
-        point(left + half, top + end - small * k),
-    );
-    path.line_to(point(left + half, bottom - end));
-    path.cubic_bezier_to(
-        point(left + end, bottom - half),
-        point(left + half, bottom - end + small * k),
-        point(left + end - small * k, bottom - half),
-    );
-    path.line_to(point(edge - r, bottom - half));
-    path.cubic_bezier_to(
-        point(edge + half, bottom + r),
-        point(edge - r + big * k, bottom - half),
-        point(edge + half, bottom + r - big * k),
-    );
-    path
 }
 
 /// The page sits on a raised panel above the chrome: a tight contact shadow,
@@ -2565,20 +2278,6 @@ pub(crate) fn page_color(tint: Option<u32>, dark: bool) -> u32 {
     tint.unwrap_or(palette(dark).card)
 }
 
-/// Dark or light ink, whichever reads on `background` (`0xRRGGBB`).
-fn readable_on(background: u32) -> u32 {
-    let channel = |shift: u32| {
-        let value = ((background >> shift) & 0xff) as f32 / 255.;
-        if value <= 0.04045 {
-            value / 12.92
-        } else {
-            ((value + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    let luminance = 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
-    if luminance > 0.4 { 0x1d232c } else { 0xf2f3f5 }
-}
-
 /// A light veil of our palette over the system sidebar material, so the frost
 /// keeps the shell's tone while the desktop still shows through.
 /// Space colors as (name, light, dark). Gray is the untinted default.
@@ -2614,19 +2313,6 @@ fn space_color(space: &spaces::Space, dark: bool) -> u32 {
         .copied()
         .unwrap_or(SPACE_COLORS[0]);
     if dark { night } else { light }
-}
-
-/// `top` composited over opaque `under`, as one opaque color.
-fn over(top: Hsla, under: Hsla) -> Hsla {
-    let (top, under) = (Rgba::from(top), Rgba::from(under));
-    let mix = |a: f32, b: f32| a * top.a + b * (1. - top.a);
-    Rgba {
-        r: mix(top.r, under.r),
-        g: mix(top.g, under.g),
-        b: mix(top.b, under.b),
-        a: 1.,
-    }
-    .into()
 }
 
 /// A translucent hairline, so the edge reads as light rather than a stroke.
