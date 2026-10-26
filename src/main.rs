@@ -244,6 +244,9 @@ struct Browser {
     address_primed: bool,
     /// Where a press on the resting address began, until it clicks or drags.
     address_press: Option<Point<Pixels>>,
+    /// While the page may be moving (scrolling, typing), its side color is
+    /// sampled every frame until this moment; see `follow_page`.
+    pub(crate) side_live_until: Option<std::time::Instant>,
     /// The tab, cell and page bounds the page's side color was last
     /// sampled for; when either moves, it's sampled again.
     pub(crate) side_sampled: Option<(u64, Bounds<Pixels>, Bounds<Pixels>)>,
@@ -426,6 +429,7 @@ impl Browser {
             address_primed: false,
             address_press: None,
             side_sampled: None,
+            side_live_until: None,
             side_due: false,
             discard_pending: false,
             #[cfg(target_os = "macos")]
@@ -1560,6 +1564,53 @@ impl Browser {
         self.side_sampled = Some((tab.id, cell, page.bounds()));
     }
 
+    fn side_color(&mut self, id: u64, color: Option<u32>, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tab_mut(id)
+            && !ui::same_color(tab.side, color)
+        {
+            tab.side = color;
+            cx.notify();
+        }
+    }
+
+    /// Scrolling or typing may be moving the page under the selected tab:
+    /// sample its side color every frame while that goes on, and for a beat
+    /// after (momentum scrolling keeps reporting), then stop. Each sample is
+    /// a tiny snapshot, about a millisecond; at rest nothing runs.
+    fn follow_page(&mut self, cx: &mut Context<Self>) {
+        const FRAME: Duration = Duration::from_micros(16_667);
+        const LINGER: Duration = Duration::from_millis(250);
+        let running = self.side_live_until.is_some();
+        self.side_live_until = Some(std::time::Instant::now() + LINGER);
+        if running {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            loop {
+                let live = this
+                    .update(cx, |this, cx| {
+                        let live = this
+                            .side_live_until
+                            .is_some_and(|until| std::time::Instant::now() < until);
+                        if live {
+                            this.sample_side();
+                        } else {
+                            this.side_live_until = None;
+                            // Back to easing color changes.
+                            cx.notify();
+                        }
+                        live
+                    })
+                    .unwrap_or(false);
+                if !live {
+                    break;
+                }
+                cx.background_executor().timer(FRAME).await;
+            }
+        })
+        .detach();
+    }
+
     /// A page that never reports its first paint still shows, after a beat.
     fn fade_in_late(&mut self, id: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
@@ -1618,6 +1669,16 @@ impl Browser {
     }
 
     fn event(&mut self, event: engine::Event, window: &mut Window, cx: &mut Context<Self>) {
+        // Frequent and usually changing nothing on screen: these redraw only
+        // when the color does, rather than with every other event.
+        match event {
+            engine::Event::SideColor(id, color) => return self.side_color(id, color, cx),
+            engine::Event::PageInput => {
+                engine::page_input_seen();
+                return self.follow_page(cx);
+            }
+            _ => {}
+        }
         match event {
             engine::Event::QuitRequested => {
                 self.request_discard(lifecycle::Discard::Quit, window, cx)
@@ -1693,18 +1754,7 @@ impl Browser {
                 self.reveal(id, cx);
                 self.request_side_sample(cx);
             }
-            engine::Event::SideColor(id, color) => {
-                if let Some(tab) = self.tab_mut(id)
-                    && !ui::same_color(tab.side, color)
-                {
-                    tab.side = color;
-                    cx.notify();
-                }
-            }
-            engine::Event::PageInput => {
-                engine::page_input_seen();
-                self.request_side_sample(cx);
-            }
+            engine::Event::SideColor(..) | engine::Event::PageInput => {}
             engine::Event::Committed(id) => {
                 self.follow_site_zoom(id);
                 self.record_visit(id);

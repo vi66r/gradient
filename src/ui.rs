@@ -669,10 +669,16 @@ impl Browser {
         let side = tab
             .side
             .filter(|_| selected && tab.page.is_some() && !self.lab);
+        // Eased when the page changes color; while it's scrolling, the
+        // color follows each frame's sample instead of trailing it.
         let side_color: Hsla = motion::transition(
             format!("tab-side-{}", tab.id),
             Rgb::from(side.unwrap_or(p.card)),
-            Transition::new(NORMAL),
+            Transition::new(if self.side_live_until.is_some() {
+                Duration::ZERO
+            } else {
+                NORMAL
+            }),
             window,
             cx,
         )
@@ -869,8 +875,8 @@ impl Browser {
             .when(selected, |d| {
                 d.bg(linear_gradient(
                     90.,
-                    linear_color_stop(background, 0.45),
-                    linear_color_stop(side_color, 0.96),
+                    linear_color_stop(background, 0.72),
+                    linear_color_stop(side_color, 0.97),
                 ))
             })
             // Joined: square on the card's side, and reaching through the
