@@ -1508,9 +1508,10 @@ impl Render for Browser {
             )
             .child({
                 let join = self.tab_join.clone();
+                let outline = panel_edge(self.dark);
                 canvas(
                     |_, _, _| {},
-                    move |_, _, window, _| paint_tab_joins(&join.borrow(), window),
+                    move |_, _, window, _| paint_tab_joins(&join.borrow(), outline, window),
                 )
                 .absolute()
                 .top_0()
@@ -1553,8 +1554,9 @@ fn paint_card_shadow(card: Bounds<Pixels>, join: &TabJoin, dark: bool, window: &
 
 /// Joins the selected tab's cell to the page card, as a classic tab joins
 /// its page: the card's edge hairline is covered where the cell meets it,
-/// and concave curves above and below run the cell into the card's edge.
-fn paint_tab_joins(join: &TabJoin, window: &mut Window) {
+/// concave curves above and below run the cell into the card's edge, and
+/// the card's outline runs on around the curves and the cell.
+fn paint_tab_joins(join: &TabJoin, outline: Hsla, window: &mut Window) {
     let Some(list) = join.list else {
         return;
     };
@@ -1564,7 +1566,7 @@ fn paint_tab_joins(join: &TabJoin, window: &mut Window) {
     let k = r * 0.5523;
     let mask = ContentMask {
         bounds: Bounds::from_corners(
-            point(edge - r - px(1.), list.top()),
+            point(px(0.), list.top()),
             point(edge + px(2.), list.bottom()),
         ),
     };
@@ -1592,8 +1594,53 @@ fn paint_tab_joins(join: &TabJoin, window: &mut Window) {
             if let Ok(path) = path.build() {
                 window.paint_path(path, color.opacity(*joined));
             }
+            if let Ok(path) = tab_outline(*cell, edge, r).build() {
+                window.paint_path(path, outline.opacity(outline.a * joined));
+            }
         }
     });
+}
+
+/// The card's 1 pt outline continued around a joined cell: from the card's
+/// edge, around the upper curve, along the cell's top, around its rounded
+/// end and back along the bottom and the lower curve to the card's edge.
+/// Like the card's own border, it runs half a point inside the shape.
+fn tab_outline(cell: Bounds<Pixels>, edge: Pixels, r: Pixels) -> PathBuilder {
+    let half = px(0.5);
+    let (top, bottom, left) = (cell.top(), cell.bottom(), cell.left());
+    // Quarter circles as cubic Béziers.
+    let k = 0.5523;
+    // The curves into the card, around centers outside the shape.
+    let big = r + half;
+    // The cell's rounded end, inside it.
+    let end = px(R_CONTROL);
+    let small = end - half;
+    let mut path = PathBuilder::stroke(px(1.));
+    path.move_to(point(edge + half, top - r));
+    path.cubic_bezier_to(
+        point(edge - r, top + half),
+        point(edge + half, top - r + big * k),
+        point(edge - r + big * k, top + half),
+    );
+    path.line_to(point(left + end, top + half));
+    path.cubic_bezier_to(
+        point(left + half, top + end),
+        point(left + end - small * k, top + half),
+        point(left + half, top + end - small * k),
+    );
+    path.line_to(point(left + half, bottom - end));
+    path.cubic_bezier_to(
+        point(left + end, bottom - half),
+        point(left + half, bottom - end + small * k),
+        point(left + end - small * k, bottom - half),
+    );
+    path.line_to(point(edge - r, bottom - half));
+    path.cubic_bezier_to(
+        point(edge + half, bottom + r),
+        point(edge - r + big * k, bottom - half),
+        point(edge + half, bottom + r - big * k),
+    );
+    path
 }
 
 /// The page sits on a raised panel above the chrome: a tight contact shadow,
