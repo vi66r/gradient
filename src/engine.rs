@@ -102,6 +102,9 @@ pub enum Event {
     /// Local files dropped on a page, as file URLs, to open in new tabs.
     OpenFiles(u64, Vec<String>),
     Notice(String),
+    /// Something outside the shell changed what it shows (the default
+    /// browser); render again.
+    Changed,
     /// A fetched site icon for a host key, or `None` when none could be used.
     Icon(String, Option<Vec<u8>>),
     /// A primary click in window coordinates (top-left origin) that native
@@ -1527,6 +1530,80 @@ pub fn remove_data_store(profile: [u8; 16], events: Sender<Event>) {
     }
     #[cfg(not(target_os = "macos"))]
     let _ = (profile, events);
+}
+
+/// Erases a Space's website data (cookies, storage, caches), signing it out
+/// everywhere. Open pages keep running and lose their sign-ins too.
+pub fn clear_website_data(profile: [u8; 16], events: Sender<Event>) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::NSDate;
+        use objc2_web_kit::WKWebsiteDataStore;
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        let store = data_store(false, profile, mtm);
+        let done = block2::RcBlock::new(move || {
+            let _ = events.try_send(Event::Notice("Website data cleared.".into()));
+        });
+        unsafe {
+            store.removeDataOfTypes_modifiedSince_completionHandler(
+                &WKWebsiteDataStore::allWebsiteDataTypes(mtm),
+                &NSDate::distantPast(),
+                &done,
+            )
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (profile, events);
+}
+
+/// Whether Browser opens web links from other apps: `None` when it can't
+/// tell or can't be chosen (a bare binary rather than the app bundle).
+pub fn is_default_browser() -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSWorkspace;
+        use objc2_foundation::{NSBundle, NSString, NSURL};
+        let bundle = NSBundle::mainBundle();
+        bundle.bundleIdentifier()?;
+        let own = bundle.bundleURL();
+        let probe = NSURL::URLWithString(&NSString::from_str("https://example.com/"))?;
+        let handler = NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&probe)?;
+        let path = |url: &NSURL| url.path().map(|path| path.to_string());
+        Some(path(&handler) == path(&own))
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+/// Asks macOS to make Browser the default for web links. macOS confirms
+/// with the user first; the answer arrives as `Changed` (or a notice).
+pub fn make_default_browser(events: Sender<Event>) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSWorkspace;
+        use objc2_foundation::{NSBundle, NSError, NSString};
+        let own = NSBundle::mainBundle().bundleURL();
+        let done = block2::RcBlock::new(move |error: *mut NSError| {
+            // Declining the system's confirmation is an error too; it needs
+            // no notice.
+            if let Some(error) = unsafe { error.as_ref() }
+                && error.code() != objc2_foundation::NSUserCancelledError
+            {
+                log::warn!("Default browser: {}", error.localizedDescription());
+            }
+            let _ = events.try_send(Event::Changed);
+        });
+        NSWorkspace::sharedWorkspace()
+            .setDefaultApplicationAtURL_toOpenURLsWithScheme_completionHandler(
+                &own,
+                &NSString::from_str("http"),
+                Some(&done),
+            );
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = events;
 }
 
 /// A Space's website data store: one throwaway store per Private Space, the

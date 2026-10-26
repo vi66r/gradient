@@ -1,8 +1,9 @@
 //! Address suggestions while typing: the first row is what Enter does (the
 //! top history hit, completed inline as in Safari, or the typed search or
-//! address), then this Space's open tabs, then its history by frecency with
-//! host-prefix matches first. A search row closes the list when a hit took
-//! the first place, so searching for the typed text is always one ↓ away.
+//! address). When a hit took the first place, searching for the typed text
+//! follows it, one ↓ away. Then the search engine's suggestions (searches
+//! only, never from the Private Space), this Space's open tabs, and its
+//! history by frecency with host-prefix matches first.
 //!
 //! WebKit draws above GPUI, so while the list is open the page is shown as
 //! a still picture (`Cover`) and its native view hidden: nothing reflows
@@ -218,13 +219,24 @@ fn typed_row(typed: &str, engine: SearchEngine) -> Option<Row> {
     }
 }
 
+/// At most this many of the search engine's suggestions.
+const MAX_REMOTE: usize = 4;
+/// Open tabs and history keep at least this many rows when they have them.
+const MIN_PERSONAL: usize = 3;
+
 /// Ranks suggestions for `typed`. `complete` allows an inline completion:
 /// only while the user is adding text at its end, never after a deletion.
+/// `remote` is what the search engine suggested for exactly this text.
+///
+/// The order is Safari's: what Enter does, then searches (the typed text
+/// when a page took the first row, then the engine's suggestions), then
+/// open tabs and history.
 pub(crate) fn rank(
     typed: &str,
     complete: bool,
     tabs: &[OpenTab],
     history: &[Entry],
+    remote: &[String],
     engine: SearchEngine,
     now: u64,
 ) -> Ranked {
@@ -233,6 +245,7 @@ pub(crate) fn rank(
         return Ranked::default();
     }
     let terms = terms(typed);
+    let query = typed.trim();
     let hit = (complete && typed == typed.trim_end())
         .then(|| top_hit(&needle, history, now))
         .flatten();
@@ -267,32 +280,35 @@ pub(crate) fn rank(
                 },
             });
             shown.push(hit.url.clone());
+            // Searching for the typed text stays one ↓ away.
+            ranked.rows.push(Row {
+                action: Action::Open(engine.search(query)),
+                look: Look::Search,
+                title: query.to_string(),
+                detail: format!("Search {}", engine.name()),
+                url: None,
+            });
         }
         None => ranked.rows.extend(typed_row(typed, engine)),
     }
-    let reserve = usize::from(hit.is_some());
     let mut open: Vec<&OpenTab> = tabs
         .iter()
         .filter(|tab| hit_tab.is_none_or(|hit| hit.id != tab.id))
         .filter(|tab| model::allowed_address(tab.url) && matches(&terms, tab.title, tab.url))
         .collect();
     open.sort_by_key(|tab| !host_prefix(&needle, tab.url));
-    for tab in open.into_iter().take(MAX_TABS) {
-        if ranked.rows.len() + reserve >= MAX_ROWS {
-            break;
-        }
-        ranked.rows.push(Row {
-            action: Action::Tab(tab.id),
-            look: Look::Tab,
-            title: titled(tab.title, tab.url),
-            detail: bare(tab.url),
-            url: Some(tab.url.to_string()),
-        });
-        shown.extend(history::key(tab.url));
-    }
+    open.truncate(MAX_TABS);
+    let open_urls: Vec<String> = open
+        .iter()
+        .filter_map(|tab| history::key(tab.url))
+        .collect();
     let mut pages: Vec<(bool, f64, &Entry)> = history
         .iter()
-        .filter(|entry| !shown.contains(&entry.url) && matches(&terms, &entry.title, &entry.url))
+        .filter(|entry| {
+            !shown.contains(&entry.url)
+                && !open_urls.contains(&entry.url)
+                && matches(&terms, &entry.title, &entry.url)
+        })
         .map(|entry| {
             (
                 !host_prefix(&needle, &entry.url),
@@ -302,8 +318,36 @@ pub(crate) fn rank(
         })
         .collect();
     pages.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.total_cmp(&a.1)));
+    let personal = (open.len() + pages.len()).min(MIN_PERSONAL);
+    let lower = query.to_lowercase();
+    let room = MAX_ROWS.saturating_sub(ranked.rows.len() + personal);
+    ranked.rows.extend(
+        remote
+            .iter()
+            .filter(|suggestion| suggestion.to_lowercase() != lower)
+            .take(MAX_REMOTE.min(room))
+            .map(|suggestion| Row {
+                action: Action::Open(engine.search(suggestion)),
+                look: Look::Search,
+                title: suggestion.clone(),
+                detail: String::new(),
+                url: None,
+            }),
+    );
+    for tab in open {
+        if ranked.rows.len() >= MAX_ROWS {
+            break;
+        }
+        ranked.rows.push(Row {
+            action: Action::Tab(tab.id),
+            look: Look::Tab,
+            title: titled(tab.title, tab.url),
+            detail: bare(tab.url),
+            url: Some(tab.url.to_string()),
+        });
+    }
     for (_, _, entry) in pages {
-        if ranked.rows.len() + reserve >= MAX_ROWS {
+        if ranked.rows.len() >= MAX_ROWS {
             break;
         }
         ranked.rows.push(Row {
@@ -314,17 +358,89 @@ pub(crate) fn rank(
             url: Some(entry.url.clone()),
         });
     }
-    if hit.is_some() {
-        let query = typed.trim();
-        ranked.rows.push(Row {
-            action: Action::Open(engine.search(query)),
-            look: Look::Search,
-            title: query.to_string(),
-            detail: format!("Search {}", engine.name()),
-            url: None,
-        });
-    }
     ranked
+}
+
+/// The search engine's suggestions for typed text, with recent answers kept
+/// so deleting back to earlier text shows them at once.
+#[derive(Default)]
+pub(crate) struct Remote {
+    /// Bumped with each keystroke; a late answer for older text is dropped.
+    pub epoch: u64,
+    recent: std::collections::VecDeque<(SearchEngine, String, Vec<String>)>,
+}
+
+const REMOTE_KEPT: usize = 32;
+/// Typing pauses this long before the engine is asked.
+const REMOTE_PAUSE: std::time::Duration = std::time::Duration::from_millis(90);
+
+impl Remote {
+    fn get(&self, engine: SearchEngine, query: &str) -> Option<&[String]> {
+        self.recent
+            .iter()
+            .find(|(kept, text, _)| *kept == engine && text == query)
+            .map(|(_, _, suggestions)| suggestions.as_slice())
+    }
+
+    fn keep(&mut self, engine: SearchEngine, query: String, suggestions: Vec<String>) {
+        self.recent
+            .retain(|(kept, text, _)| !(*kept == engine && *text == query));
+        self.recent.push_front((engine, query, suggestions));
+        self.recent.truncate(REMOTE_KEPT);
+    }
+}
+
+/// What the engine may be asked about: a search, never an address, a local
+/// name or an app link, so typed addresses don't leave the machine.
+pub(crate) fn askable(typed: &str, engine: SearchEngine) -> Option<String> {
+    let query = typed.trim();
+    if query.is_empty() || query.len() > 200 {
+        return None;
+    }
+    match model::entry(typed, engine).ok()? {
+        model::Entry::Web(url) if url == engine.search(query) => Some(query.to_string()),
+        _ => None,
+    }
+}
+
+/// Reads the engine's answer: `["query", ["suggestion", …], …]`.
+pub(crate) fn parse_remote(body: &str) -> Vec<String> {
+    let Ok(serde_json::Value::Array(parts)) = serde_json::from_str(body) else {
+        return Vec::new();
+    };
+    let Some(serde_json::Value::Array(list)) = parts.get(1) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|item| item.as_str())
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty() && item.len() <= 200)
+        .take(8)
+        .collect()
+}
+
+/// Asks the engine (blocking; run off the main thread). No cookies are sent:
+/// the request isn't the page's and carries nothing but the text.
+fn fetch_remote(url: &str) -> Vec<String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(3)))
+        .max_redirects(0)
+        .build()
+        .into();
+    agent
+        .get(url)
+        .call()
+        .ok()
+        .and_then(|mut response| {
+            response
+                .body_mut()
+                .with_config()
+                .limit(64 * 1024)
+                .read_to_string()
+                .ok()
+        })
+        .map(|body| parse_remote(&body))
+        .unwrap_or_default()
 }
 
 /// What the list covers the page with while it is open.
@@ -348,6 +464,9 @@ pub(crate) struct Suggestions {
     pub typed: String,
     /// The completion showing, selected, after `typed`.
     pub completion: String,
+    /// Whether the last edit allowed an inline completion, to rank again
+    /// the same way when the engine answers.
+    pub complete: bool,
     pub cover: Cover,
 }
 
@@ -418,31 +537,22 @@ impl Browser {
         let previous = std::mem::take(&mut self.suggest.typed);
         let grew = value.len() > previous.len() && value.starts_with(&previous);
         let complete = grew && !composing && selection == (value.len()..value.len());
-        let active = self.tabs[self.active].id;
-        let tabs: Vec<OpenTab> = self
-            .tabs
-            .iter()
-            .filter(|tab| tab.id != active)
-            .map(|tab| OpenTab {
-                id: tab.id,
-                title: &tab.saved.title,
-                url: &tab.saved.url,
-            })
-            .collect();
-        let space = self.current_space();
-        let entries = if space.private {
-            &[][..]
-        } else {
-            self.history.entries(space.id)
-        };
-        let ranked = rank(
-            &value,
-            complete,
-            &tabs,
-            entries,
-            self.settings.search,
-            history::now(),
-        );
+        let engine = self.settings.search;
+        let asking = askable(&value, engine)
+            .filter(|_| self.settings.suggest_searches && !self.current_space().private);
+        let remote = asking
+            .as_deref()
+            .and_then(|query| self.remote.get(engine, query))
+            .map(<[String]>::to_vec)
+            .unwrap_or_default();
+        let ranked = self.ranked(&value, complete, &remote);
+        self.suggest.complete = complete;
+        self.remote.epoch += 1;
+        if let Some(query) = asking
+            && self.remote.get(engine, &query).is_none()
+        {
+            self.ask_engine(engine, query, cx);
+        }
         self.suggest.typed = value.clone();
         self.suggest.completion.clear();
         if !ranked.completion.is_empty() {
@@ -463,6 +573,76 @@ impl Browser {
             self.close_suggestions();
         }
         cx.notify();
+    }
+
+    /// Ranks `value` against this Space's tabs (but the one in front) and
+    /// history.
+    fn ranked(&mut self, value: &str, complete: bool, remote: &[String]) -> Ranked {
+        let active = self.tabs[self.active].id;
+        let tabs: Vec<OpenTab> = self
+            .tabs
+            .iter()
+            .filter(|tab| tab.id != active)
+            .map(|tab| OpenTab {
+                id: tab.id,
+                title: &tab.saved.title,
+                url: &tab.saved.url,
+            })
+            .collect();
+        let space = self.current_space();
+        let entries = if space.private {
+            &[][..]
+        } else {
+            self.history.entries(space.id)
+        };
+        rank(
+            value,
+            complete,
+            &tabs,
+            entries,
+            remote,
+            self.settings.search,
+            history::now(),
+        )
+    }
+
+    /// Asks the search engine about `query` once typing pauses; the answer
+    /// joins the list if the field still says the same.
+    fn ask_engine(&mut self, engine: SearchEngine, query: String, cx: &mut Context<Self>) {
+        let epoch = self.remote.epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(REMOTE_PAUSE).await;
+            let still = this
+                .update(cx, |this, _| this.remote.epoch == epoch)
+                .unwrap_or(false);
+            if !still {
+                return;
+            }
+            let url = engine.suggestions(&query);
+            let suggestions = cx
+                .background_executor()
+                .spawn(async move { fetch_remote(&url) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.remote.keep(engine, query.clone(), suggestions.clone());
+                if this.remote.epoch != epoch
+                    || !this.suggest.open
+                    || this.suggest.typed.trim() != query
+                {
+                    return;
+                }
+                let selected = this.suggest.rows.get(this.suggest.selected).cloned();
+                let typed = this.suggest.typed.clone();
+                let ranked = this.ranked(&typed, this.suggest.complete, &suggestions);
+                // The row the user moved to stays chosen.
+                this.suggest.selected = selected
+                    .and_then(|row| ranked.rows.iter().position(|new| new.action == row.action))
+                    .unwrap_or(0);
+                this.suggest.rows = ranked.rows;
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Site icons for the rows from the disk cache; history reaches sites
@@ -490,7 +670,7 @@ impl Browser {
     /// Asks the active page for a picture to stand in for it under the list.
     fn cover_page(&mut self) {
         let tab = &self.tabs[self.active];
-        let Some(page) = tab.page.as_ref().filter(|_| !self.lab) else {
+        let Some(page) = tab.page.as_ref().filter(|_| self.tool.is_none()) else {
             return;
         };
         match self.suggest.cover {
@@ -671,26 +851,27 @@ mod tests {
 
     #[test]
     fn typing_a_host_prefix_completes_the_site_and_goes_to_its_root() {
-        let ranked = rank("git", true, &[], &history(), DDG, NOW);
+        let ranked = rank("git", true, &[], &history(), &[], DDG, NOW);
         assert_eq!(ranked.completion, "hub.com");
         assert_eq!(
             ranked.rows[0].action,
             Action::Open("https://github.com/".into())
         );
         assert_eq!(ranked.rows[0].title, "GitHub");
-        // Then the site's pages, host matches before the rest, and search last.
+        // Then searching for the typed text, one ↓ away, and the site's
+        // pages, host matches before the rest.
         let urls: Vec<_> = ranked.rows.iter().map(|row| row.action.clone()).collect();
         assert_eq!(
             urls[1..],
             [
+                Action::Open(DDG.search("git")),
                 Action::Open("https://github.com/rafi/browser".into()),
                 Action::Open("https://gist.github.com/".into()),
                 Action::Open("https://example.com/git-guide".into()),
-                Action::Open(DDG.search("git")),
             ]
         );
         // Local servers keep their scheme and port.
-        let ranked = rank("local", true, &[], &history(), DDG, NOW);
+        let ranked = rank("local", true, &[], &history(), &[], DDG, NOW);
         assert_eq!(ranked.completion, "host:5173");
         assert_eq!(
             ranked.rows[0].action,
@@ -700,14 +881,14 @@ mod tests {
 
     #[test]
     fn a_typed_path_completes_to_a_page() {
-        let ranked = rank("github.com/r", true, &[], &history(), DDG, NOW);
+        let ranked = rank("github.com/r", true, &[], &history(), &[], DDG, NOW);
         assert_eq!(ranked.completion, "afi/browser");
         assert_eq!(
             ranked.rows[0].action,
             Action::Open("https://github.com/rafi/browser".into())
         );
         // Schemes and `www.` typed by hand still match.
-        let ranked = rank("https://www.news", true, &[], &history(), DDG, NOW);
+        let ranked = rank("https://www.news", true, &[], &history(), &[], DDG, NOW);
         assert_eq!(ranked.completion, ".ycombinator.com");
     }
 
@@ -715,13 +896,13 @@ mod tests {
     fn without_completion_enter_does_what_was_typed() {
         // After a deletion, or for words, the first row is the search.
         for (typed, complete) in [("git", false), ("guide to", true), ("git ", true)] {
-            let ranked = rank(typed, complete, &[], &history(), DDG, NOW);
+            let ranked = rank(typed, complete, &[], &history(), &[], DDG, NOW);
             assert!(ranked.completion.is_empty(), "{typed}");
             assert_eq!(ranked.rows[0].action, Action::Typed, "{typed}");
             assert_eq!(ranked.rows[0].look, Look::Search, "{typed}");
             assert_eq!(ranked.rows[0].detail, "Search DuckDuckGo");
         }
-        let ranked = rank("guide to", true, &[], &history(), DDG, NOW);
+        let ranked = rank("guide to", true, &[], &history(), &[], DDG, NOW);
         assert_eq!(
             ranked.rows[1].action,
             Action::Open("https://example.com/git-guide".into())
@@ -732,13 +913,18 @@ mod tests {
             true,
             &[],
             &history(),
+            &[],
             SearchEngine::Kagi,
             NOW,
         );
         assert_eq!(ranked.rows.len(), 1);
         assert_eq!(ranked.rows[0].look, Look::Address);
         assert_eq!(ranked.rows[0].title, "example.org/a");
-        assert!(rank("   ", true, &[], &history(), DDG, NOW).rows.is_empty());
+        assert!(
+            rank("   ", true, &[], &history(), &[], DDG, NOW)
+                .rows
+                .is_empty()
+        );
     }
 
     #[test]
@@ -755,7 +941,7 @@ mod tests {
                 url: model::START,
             },
         ];
-        let ranked = rank("browser", true, &tabs, &history(), DDG, NOW);
+        let ranked = rank("browser", true, &tabs, &history(), &[], DDG, NOW);
         assert_eq!(ranked.rows[0].look, Look::Search);
         assert_eq!(ranked.rows[1].action, Action::Tab(4));
         assert!(
@@ -772,7 +958,7 @@ mod tests {
             title: "Hacker News",
             url: "https://news.ycombinator.com/",
         }];
-        let ranked = rank("news", true, &tabs, &history(), DDG, NOW);
+        let ranked = rank("news", true, &tabs, &history(), &[], DDG, NOW);
         assert_eq!(ranked.completion, ".ycombinator.com");
         assert_eq!(ranked.rows[0].action, Action::Tab(7));
         assert_eq!(ranked.rows[0].look, Look::Tab);
@@ -792,9 +978,9 @@ mod tests {
             entry("https://news.ycombinator.com/", "HN", 40, 1),
             entry("https://news.example.com/", "Example News", 40, 120),
         ];
-        let ranked = rank("news", true, &[], &history, DDG, NOW);
+        let ranked = rank("news", true, &[], &history, &[], DDG, NOW);
         assert_eq!(ranked.completion, ".ycombinator.com");
-        let ranked = rank("n", true, &[], &history, DDG, NOW);
+        let ranked = rank("n", true, &[], &history, &[], DDG, NOW);
         assert!(ranked.rows.len() <= MAX_ROWS);
     }
 
@@ -806,7 +992,7 @@ mod tests {
         // Longer terms match inside words, but a word start still wins.
         assert_eq!(find_term("rust-lang lang", "ang"), Some(6));
         assert_eq!(find_term("a lang", "lan"), Some(2));
-        let ranked = rank("g", true, &[], &history(), DDG, NOW);
+        let ranked = rank("g", true, &[], &history(), &[], DDG, NOW);
         assert!(
             ranked
                 .rows
@@ -820,8 +1006,67 @@ mod tests {
         let history: Vec<Entry> = (0..40)
             .map(|index| entry(&format!("https://site{index}.example/"), "Site", 1, 1))
             .collect();
-        let ranked = rank("site", true, &[], &history, DDG, NOW);
+        let ranked = rank("site", true, &[], &history, &[], DDG, NOW);
         assert_eq!(ranked.rows.len(), MAX_ROWS);
-        assert_eq!(ranked.rows.last().unwrap().look, Look::Search);
+        assert_eq!(ranked.rows[1].look, Look::Search);
+        assert!(ranked.rows[2..].iter().all(|row| row.look == Look::Page));
+    }
+
+    #[test]
+    fn engine_suggestions_follow_the_searches_and_leave_room_for_history() {
+        let remote: Vec<String> = [
+            "git",
+            "git commit",
+            "github copilot",
+            "gitlab",
+            "git rebase",
+            "gitea",
+        ]
+        .map(String::from)
+        .into();
+        let ranked = rank("git", true, &[], &history(), &remote, DDG, NOW);
+        let titles: Vec<&str> = ranked.rows.iter().map(|row| row.title.as_str()).collect();
+        // The hit, the typed search, then the engine's (the typed text once
+        // only), and three of history's pages still fit.
+        assert_eq!(
+            titles[..5],
+            ["GitHub", "git", "git commit", "github copilot", "gitlab"]
+        );
+        assert_eq!(ranked.rows.len(), MAX_ROWS);
+        assert!(ranked.rows[5..].iter().all(|row| row.look == Look::Page));
+        assert_eq!(
+            ranked.rows[2].action,
+            Action::Open(DDG.search("git commit"))
+        );
+        // With no history, the engine gets its full share.
+        let ranked = rank("rust bor", true, &[], &[], &remote, DDG, NOW);
+        assert_eq!(ranked.rows.len(), 1 + MAX_REMOTE);
+    }
+
+    #[test]
+    fn only_searches_are_sent_to_the_engine() {
+        assert_eq!(askable("rust borrow", DDG).as_deref(), Some("rust borrow"));
+        assert_eq!(askable("  git ", DDG).as_deref(), Some("git"));
+        for never in [
+            "github.com",
+            "localhost:5173",
+            "https://example.com/a?q=1",
+            "mailto:a@b.com",
+            "192.168.1.1",
+            "",
+        ] {
+            assert_eq!(askable(never, DDG), None, "{never}");
+        }
+    }
+
+    #[test]
+    fn engine_answers_are_read_defensively() {
+        assert_eq!(
+            parse_remote(r#"["rust",["rust lang"," rust book ",""],[],{}]"#),
+            ["rust lang", "rust book"]
+        );
+        assert!(parse_remote("not json").is_empty());
+        assert!(parse_remote(r#"{"q":"rust"}"#).is_empty());
+        assert!(parse_remote(r#"["rust",[1,2]]"#).is_empty());
     }
 }

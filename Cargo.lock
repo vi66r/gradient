@@ -746,6 +746,7 @@ dependencies = [
  "anyhow",
  "async-channel",
  "block2 0.6.2",
+ "chrono",
  "env_logger",
  "fs2",
  "futures-lite",

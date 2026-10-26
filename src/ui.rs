@@ -1,4 +1,7 @@
 use crate::*;
+
+mod tools;
+
 use gpui::assets::IconName;
 use gpui::base::motion::{self, Transition};
 use gpui::component::{
@@ -87,6 +90,7 @@ impl Browser {
         let access = self.agent_access(&self.tabs[self.active]);
         let grant = access.is_some();
         let agent_ink = agent_color(p, self.dark, access.as_ref().is_some_and(|a| a.trusted()));
+        let lab = self.tool == Some(Tool::Lab);
         div()
             .flex()
             .flex_col()
@@ -182,7 +186,7 @@ impl Browser {
                                     .id("request-lab")
                                     .role(Role::Button)
                                     .aria_label("Request lab")
-                                    .aria_selected(self.lab)
+                                    .aria_selected(lab)
                                     .flex_1()
                                     .h(px(32.))
                                     .px_2()
@@ -192,15 +196,17 @@ impl Browser {
                                     .rounded(px(R_CONTROL))
                                     .cursor_pointer()
                                     .text_size(px(13.))
-                                    .text_color(rgb(if self.lab { p.ink } else { p.muted }))
-                                    .when(self.lab, |d| d.bg(rgb(p.selected)).shadow_xs())
-                                    .when(!self.lab, |d| {
+                                    .text_color(rgb(if lab { p.ink } else { p.muted }))
+                                    .when(lab, |d| d.bg(rgb(p.selected)).shadow_xs())
+                                    .when(!lab, |d| {
                                         d.hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
                                     })
                                     .child(Icon::new(IconName::Terminal).size_4())
                                     .child("Request Lab")
-                                    .on_click(cx.listener(|this, _, w, cx| this.show_lab(w, cx))),
+                                    .on_click(cx.listener(|this, _, w, cx| this.show_tool(Tool::Lab, w, cx))),
                             )
+                            .child(self.tool_button(Tool::History, p, cx))
+                            .child(self.tool_button(Tool::Settings, p, cx))
                             .child(
                                 icon_button(
                                     "agent-access",
@@ -224,6 +230,23 @@ impl Browser {
                     ),
             )
             .into_any_element()
+    }
+
+    /// History or Settings in the footer, lit while it's in the card.
+    fn tool_button(&self, tool: Tool, p: Palette, cx: &mut Context<Self>) -> Stateful<Div> {
+        let (id, title, icon) = match tool {
+            Tool::History => ("show-history", "History", IconName::Clock),
+            _ => ("show-settings", "Settings", IconName::Settings),
+        };
+        let open = self.tool == Some(tool);
+        icon_button(id, title, icon, p)
+            .size(px(32.))
+            .rounded(px(R_CONTROL))
+            .aria_selected(open)
+            .when(open, |d| {
+                d.bg(rgb(p.selected)).text_color(rgb(p.ink)).shadow_xs()
+            })
+            .on_click(cx.listener(move |this, _, w, cx| this.show_tool(tool, w, cx)))
     }
 
     /// A download, shaped like the Request Lab row beneath it: the file's name
@@ -589,7 +612,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let tab = &self.tabs[index];
-        let selected = index == self.active && !self.lab;
+        let selected = index == self.active && self.tool.is_none();
         let background = motion::transition(
             format!("tab-bg-{}", tab.id),
             hsla(if selected { p.selected } else { p.chrome }),
@@ -908,7 +931,9 @@ impl Browser {
                     )
                     .child(
                         pill_button("start-request", "Make a request", IconName::Terminal, p)
-                            .on_click(cx.listener(|this, _, w, cx| this.show_lab(w, cx))),
+                            .on_click(
+                                cx.listener(|this, _, w, cx| this.show_tool(Tool::Lab, w, cx)),
+                            ),
                     ),
             )
             .child(
@@ -1196,13 +1221,22 @@ impl Render for Browser {
         if !self.suggest.open && reveal < 0.01 {
             self.suggest.cover = suggest::Cover::None;
         }
+        let tool_view = self.tool.map(|tool| -> (AnyElement, SharedString) {
+            match tool {
+                Tool::Lab => (self.request_lab(cx), "lab".into()),
+                Tool::History => (self.history_view(window, cx), "history".into()),
+                Tool::Settings => (self.settings_view(window, cx), "settings".into()),
+            }
+        });
         let tab = &self.tabs[self.active];
         let covered = match &self.suggest.cover {
-            suggest::Cover::Ready(id, image) if *id == tab.id && !self.lab => Some(image.clone()),
+            suggest::Cover::Ready(id, image) if *id == tab.id && self.tool.is_none() => {
+                Some(image.clone())
+            }
             _ => None,
         };
-        let (content, key): (AnyElement, SharedString) = if self.lab {
-            (self.request_lab(cx), "lab".into())
+        let (content, key): (AnyElement, SharedString) = if let Some(view) = tool_view {
+            view
         } else if let Some(image) = covered {
             (
                 self.page_picture(image, reveal, cx),
@@ -1226,7 +1260,7 @@ impl Render for Browser {
         };
         let body = div().flex_1().min_h_0().child(content);
         // Native pages draw above GPUI and can't fade; shell-drawn content can.
-        let body = if !self.lab && tab.page.is_some() {
+        let body = if self.tool.is_none() && tab.page.is_some() {
             body.into_any_element()
         } else {
             body.with_animation(
@@ -1316,7 +1350,18 @@ impl Render for Browser {
             .on_action(cx.listener(|this, _: &PreviousTab, w, cx| {
                 this.activate((this.active + this.tabs.len() - 1) % this.tabs.len(), w, cx)
             }))
-            .on_action(cx.listener(|this, _: &RequestLab, w, cx| this.show_lab(w, cx)))
+            .on_action(cx.listener(|this, _: &RequestLab, w, cx| this.show_tool(Tool::Lab, w, cx)))
+            .on_action(
+                cx.listener(|this, _: &ShowHistory, w, cx| this.show_tool(Tool::History, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ShowSettings, w, cx| this.show_tool(Tool::Settings, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, action: &history_view::ClearRange, w, cx| {
+                    this.clear_history_range(action.range, w, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &Inspect, _, _| {
                 if let Some(page) = &this.tabs[this.active].page {
                     page.raw.open_devtools();
@@ -1469,7 +1514,7 @@ impl Browser {
         }
         // Hover washes that work on any Space color.
         let wash = if over_dark { 0xffffff1f } else { 0x0000000f };
-        let live = tab.page.is_some() && !self.lab;
+        let live = tab.page.is_some() && self.tool.is_none();
         let addressed = tab.saved.url != START;
         let copied = self.copy_feedback == Some(CopyTarget::Address);
         div()
@@ -1564,10 +1609,10 @@ impl Browser {
                     ),
                 )
             })
-            .when(!self.lab, |strip| {
+            .when(self.tool.is_none(), |strip| {
                 strip.children(self.extension_buttons(wash, ink, background, cx))
             })
-            .when(!self.lab && self.has_extensions(), |strip| {
+            .when(self.tool.is_none() && self.has_extensions(), |strip| {
                 strip.child(
                     toolbar_button("extensions", "Extensions", IconName::Puzzle, wash).on_click(
                         cx.listener(|this, event: &ClickEvent, window, cx| {
@@ -1576,7 +1621,7 @@ impl Browser {
                     ),
                 )
             })
-            .when(tab.loading && !self.lab, |strip| {
+            .when(tab.loading && self.tool.is_none(), |strip| {
                 strip.child(
                     div()
                         .absolute()
@@ -1705,7 +1750,7 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let open = self.finding == Some(self.tabs[self.active].id) && !self.lab;
+        let open = self.finding == Some(self.tabs[self.active].id) && self.tool.is_none();
         let reveal = motion::transition(
             "find-open",
             if open { 1. } else { 0. },

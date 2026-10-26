@@ -6,6 +6,7 @@ mod engine;
 mod extensions;
 mod favicon;
 mod history;
+mod history_view;
 mod http_client;
 mod lifecycle;
 mod mcp;
@@ -47,6 +48,8 @@ actions!(
         NextTab,
         PreviousTab,
         RequestLab,
+        ShowHistory,
+        ShowSettings,
         Inspect,
         SitePermissions,
         AddExtension,
@@ -74,6 +77,14 @@ actions!(
 #[action(namespace = browser, no_json)]
 struct SetSearchEngine {
     engine: model::SearchEngine,
+}
+
+/// What the card shows in place of the page.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Tool {
+    Lab,
+    History,
+    Settings,
 }
 
 struct Tab {
@@ -228,9 +239,16 @@ struct Browser {
     zooms: zoom::Zooms,
     /// Per-Space browsing history; never the Private Space's.
     history: history::History,
+    /// History in the card: its search field and the rows it shows.
+    history_search: Entity<InputState>,
+    history_query: String,
+    history_items: Rc<Vec<history_view::Item>>,
+    history_scroll: UniformListScrollHandle,
     settings: settings::Settings,
     /// The address field's suggestions list; see `suggest.rs`.
     suggest: suggest::Suggestions,
+    /// The search engine's suggestions; see `suggest.rs`.
+    remote: suggest::Remote,
     /// Where the address pill was last laid out, for the list beneath it.
     address_bounds: Rc<std::cell::Cell<Bounds<Pixels>>>,
     focus: FocusHandle,
@@ -247,7 +265,8 @@ struct Browser {
     discard_pending: bool,
     #[cfg(target_os = "macos")]
     termination: Option<engine::TerminationGuard>,
-    lab: bool,
+    /// A tool shown in the card instead of the page.
+    tool: Option<Tool>,
     request_method: String,
     request_url: Entity<InputState>,
     request_headers: Entity<TextareaState>,
@@ -262,6 +281,8 @@ struct Browser {
     icons: HashMap<String, (Arc<Image>, bool)>,
     /// Hosts with a fetch in flight or no usable icon this session.
     icon_requests: HashSet<String>,
+    /// Hosts History found no cached icon for this session.
+    icon_misses: HashSet<String>,
     icon_cache: favicon::DiskCache,
     /// Newest first; memory only. See `downloads.rs`.
     downloads: Vec<downloads::Download>,
@@ -294,6 +315,17 @@ impl Browser {
             cx.subscribe_in(&space_name, window, |this, _, event, window, cx| {
                 if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
                     this.finish_rename(true, window, cx);
+                }
+            });
+        let history_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search history"));
+        let history_events =
+            cx.subscribe_in(&history_search, window, |this, input, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.history_query = input.read(cx).value().to_string();
+                    this.refresh_history();
+                    this.history_scroll
+                        .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                    cx.notify();
                 }
             });
         let request_url = cx
@@ -403,8 +435,13 @@ impl Browser {
             find_matches: None,
             zooms,
             history,
+            history_search,
+            history_query: String::new(),
+            history_items: Default::default(),
+            history_scroll: UniformListScrollHandle::new(),
             settings,
             suggest: Default::default(),
+            remote: Default::default(),
             address_bounds: Default::default(),
             focus: cx.focus_handle(),
             events,
@@ -418,7 +455,7 @@ impl Browser {
             discard_pending: false,
             #[cfg(target_os = "macos")]
             termination: None,
-            lab: false,
+            tool: None,
             request_method: "GET".into(),
             request_url,
             request_headers,
@@ -430,6 +467,7 @@ impl Browser {
             dark: false,
             icons: HashMap::new(),
             icon_requests: HashSet::new(),
+            icon_misses: HashSet::new(),
             icon_cache,
             downloads: Vec::new(),
             downloads_polling: false,
@@ -441,6 +479,7 @@ impl Browser {
                 address_events,
                 find_events,
                 space_name_events,
+                history_events,
                 cx.observe_window_appearance(window, |this, window, cx| {
                     this.follow_appearance(window, cx)
                 }),
@@ -453,6 +492,32 @@ impl Browser {
         #[cfg(target_os = "macos")]
         engine::install_backdrop(window);
         this.follow_appearance(window, cx);
+        // For screenshots of debug builds only: open a tool at launch.
+        #[cfg(debug_assertions)]
+        cx.defer_in(window, |this, window, cx| {
+            match std::env::var("BROWSER_TEST_TOOL").as_deref() {
+                Ok("history") => this.show_tool(Tool::History, window, cx),
+                Ok("settings") => this.show_tool(Tool::Settings, window, cx),
+                _ => {}
+            }
+            // Types into the address field as a person would, once its
+            // focus has settled.
+            if let Ok(text) = std::env::var("BROWSER_TEST_TYPE") {
+                this.focus_address(window, cx);
+                cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        use gpui::EntityInputHandler;
+                        this.address.update(cx, |input, cx| {
+                            input.replace_text_in_range(None, &text, window, cx)
+                        });
+                    });
+                })
+                .detach();
+            }
+        });
         // Restored tabs show cached icons before (or without) loading.
         for tab in this.tabs.iter().filter(|tab| !tab.private) {
             if let Some(key) = favicon::host_key(&tab.saved.url)
@@ -540,6 +605,9 @@ impl Browser {
             ThemeMode::Light
         };
         Theme::change(mode, Some(window), cx);
+        // Switches keep a white thumb on the accent, as macOS draws them;
+        // the dark theme's thumb is its near-black background.
+        Theme::global_mut(cx).tokens.switch_thumb = gpui::white().into();
         // Pages re-report their colors themselves (theme observer); only the
         // fallback panel color depends on the shell's theme.
         for tab in self.all_tabs() {
@@ -616,7 +684,7 @@ impl Browser {
             }
         }
         self.active = index;
-        self.lab = false;
+        self.tool = None;
         self.reset_suggestions();
         self.ensure_page(index, window, cx);
         self.sync_address(window, cx);
@@ -854,7 +922,7 @@ impl Browser {
             return;
         }
         if self.discard_pending
-            || self.lab
+            || self.tool.is_some()
             || index != self.active
             || kinds.iter().any(|kind| tab.declined.contains(kind))
         {
@@ -920,13 +988,25 @@ impl Browser {
             cx.notify();
             return;
         }
-        let granted = self.permissions.site(&self.profile, &site);
-        if granted.is_empty() {
+        if self.permissions.site(&self.profile, &site).is_empty() {
             self.notice = Some(format!("{host} has no saved permissions."));
             cx.notify();
             return;
         }
-        if self.discard_pending {
+        self.reset_site_permissions(site, window, cx);
+    }
+
+    /// Forgets what a site in the current Space may use, after asking, and
+    /// stops any capture it has running. Agent trust goes with the rest.
+    fn reset_site_permissions(
+        &mut self,
+        site: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let host = model::display_host(&site);
+        let granted = self.permissions.site(&self.profile, &site);
+        if granted.is_empty() || self.discard_pending {
             return;
         }
         self.discard_pending = true;
@@ -988,7 +1068,7 @@ impl Browser {
             cx.notify();
             return;
         }
-        self.lab = false;
+        self.tool = None;
         self.notice = None;
         let tab = &mut self.tabs[self.active];
         tab.error = None;
@@ -1162,7 +1242,7 @@ impl Browser {
     fn release_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_address(window, cx);
         window.focus(&self.focus, cx);
-        if !self.lab
+        if self.tool.is_none()
             && let Some(page) = &self.tabs[self.active].page
         {
             let _ = page.raw.focus();
@@ -1263,7 +1343,7 @@ impl Browser {
                 let url = self.tab_url(index);
                 if url != START {
                     cx.write_to_clipboard(ClipboardItem::new_string(url));
-                    if index == self.active && !self.lab {
+                    if index == self.active && self.tool.is_none() {
                         self.flash_copy(CopyTarget::Address, cx);
                     }
                 }
@@ -1630,7 +1710,7 @@ impl Browser {
             } => {
                 // Only the frontmost tab may ask, and never over another
                 // dialog. Dropping `reply` leaves the page free to ask again.
-                if self.discard_pending || self.lab || self.tabs[self.active].id != id {
+                if self.discard_pending || self.tool.is_some() || self.tabs[self.active].id != id {
                     return;
                 }
                 let detail = format!("{site} wants to open a “{scheme}:” link in {app}.");
@@ -1791,6 +1871,7 @@ impl Browser {
                 }
             }
             engine::Event::Notice(message) => self.notice = Some(message),
+            engine::Event::Changed => {}
             engine::Event::DownloadStarted {
                 id,
                 tab,
@@ -1815,7 +1896,7 @@ impl Browser {
                 }
             }
             engine::Event::NativeClick(point) => {
-                let on_page = !self.lab
+                let on_page = self.tool.is_none()
                     && self.tabs[self.active]
                         .page
                         .as_ref()
@@ -1887,7 +1968,11 @@ impl Browser {
 
     /// ⌘F: shows the find bar, or selects its query if it's already open.
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(page) = self.tabs[self.active].page.clone().filter(|_| !self.lab) else {
+        let Some(page) = self.tabs[self.active]
+            .page
+            .clone()
+            .filter(|_| self.tool.is_none())
+        else {
             return;
         };
         let _ = page.raw.focus_parent();
@@ -1961,7 +2046,7 @@ impl Browser {
     fn zoom_by(&mut self, change: Option<bool>, cx: &mut Context<Self>) {
         let index = self.active;
         let tab = &self.tabs[index];
-        let Some(page) = tab.page.clone().filter(|_| !self.lab) else {
+        let Some(page) = tab.page.clone().filter(|_| self.tool.is_none()) else {
             return;
         };
         let zoom = match change {
@@ -2026,7 +2111,7 @@ impl Browser {
 
     fn print(&self) {
         let tab = &self.tabs[self.active];
-        if let Some(page) = tab.page.as_ref().filter(|_| !self.lab) {
+        if let Some(page) = tab.page.as_ref().filter(|_| self.tool.is_none()) {
             page.print(&tab.saved.title);
         }
     }
@@ -2048,16 +2133,22 @@ impl Browser {
         }
         cx.notify();
     }
-    fn show_lab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Shows a tool in the card in place of the page; the page keeps its tab.
+    fn show_tool(&mut self, tool: Tool, window: &mut Window, cx: &mut Context<Self>) {
         self.end_find();
+        self.close_suggestions();
         for tab in &self.tabs {
             if let Some(page) = &tab.page {
                 page.hide();
                 let _ = page.raw.focus_parent();
             }
         }
-        self.lab = true;
-        window.focus(&self.focus, cx);
+        self.tool = Some(tool);
+        if tool == Tool::History {
+            self.open_history(window, cx);
+        } else {
+            window.focus(&self.focus, cx);
+        }
         cx.notify();
     }
     fn suspend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2311,6 +2402,7 @@ impl Browser {
 fn menus(engine: model::SearchEngine) -> Vec<Menu> {
     vec![
         Menu::new("Browser").items([
+            MenuItem::action("Settings…", ShowSettings),
             MenuItem::submenu(
                 Menu::new("Search Engine").items(model::SearchEngine::ALL.map(|choice| {
                     MenuItem::action(choice.name(), SetSearchEngine { engine: choice })
@@ -2356,7 +2448,10 @@ fn menus(engine: model::SearchEngine) -> Vec<Menu> {
             MenuItem::action("Next Tab", NextTab),
             MenuItem::action("Previous Tab", PreviousTab),
         ]),
-        Menu::new("History").items([MenuItem::action("Clear History…", ClearHistory)]),
+        Menu::new("History").items([
+            MenuItem::action("Show All History", ShowHistory),
+            MenuItem::action("Clear History…", ClearHistory),
+        ]),
         Menu::new("Spaces").items([
             MenuItem::action("New Space", NewSpace),
             MenuItem::action("Rename Space…", RenameSpace),
@@ -2445,6 +2540,8 @@ fn main() -> anyhow::Result<()> {
             KeyBinding::new("ctrl-tab", NextTab, None),
             KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
             KeyBinding::new(&format!("{modifier}-shift-j"), RequestLab, None),
+            KeyBinding::new(&format!("{modifier}-y"), ShowHistory, None),
+            KeyBinding::new(&format!("{modifier}-,"), ShowSettings, None),
             KeyBinding::new(&format!("{modifier}-alt-i"), Inspect, None),
             KeyBinding::new(&format!("{modifier}-f"), Find, None),
             KeyBinding::new(&format!("{modifier}-g"), FindNext, None),

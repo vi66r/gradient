@@ -28,7 +28,11 @@ gpui::assets::icon_assets!(
         SkipForward,
         Download,
         AppWindow,
-        Puzzle
+        Puzzle,
+        Clock,
+        Eraser,
+        Trash,
+        RotateCcw
     ]
 );
 

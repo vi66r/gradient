@@ -196,6 +196,24 @@ impl History {
         self.remove_file(&space)
     }
 
+    /// Forgets one page (History's remove button).
+    pub fn remove(&mut self, space: [u8; 16], url: &str) {
+        let book = self.book(space);
+        let before = book.entries.len();
+        book.entries.retain(|entry| entry.url != url);
+        book.dirty |= book.entries.len() != before;
+    }
+
+    /// Forgets the pages last visited at or after `since` (Unix seconds).
+    /// An entry keeps only its latest visit, so a page seen long ago and
+    /// again today goes entirely, as in Safari.
+    pub fn clear_since(&mut self, space: [u8; 16], since: u64) {
+        let book = self.book(space);
+        let before = book.entries.len();
+        book.entries.retain(|entry| entry.last < since);
+        book.dirty |= book.entries.len() != before;
+    }
+
     /// The Space was deleted.
     pub fn forget_space(&mut self, space: [u8; 16]) -> Result<()> {
         self.books.remove(&space);
@@ -361,5 +379,27 @@ mod tests {
         assert_eq!(history.entries(WORK).len(), 1);
         history.flush().unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"half written");
+    }
+
+    #[test]
+    fn single_pages_and_recent_ranges_can_be_forgotten() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = 1_800_000_000;
+        let mut history = History::new(dir.path());
+        history.visit(WORK, "https://old.example/", "Old", now - 3 * DAY);
+        history.visit(WORK, "https://today.example/", "Today", now - 60);
+        history.visit(WORK, "https://gone.example/", "Gone", now - 2 * DAY);
+        history.visit(HOME, "https://today.example/", "Today", now - 60);
+        history.remove(WORK, "https://gone.example/");
+        history.clear_since(WORK, now - DAY);
+        history.flush().unwrap();
+        let mut reopened = History::new(dir.path());
+        let urls: Vec<&str> = reopened
+            .entries(WORK)
+            .iter()
+            .map(|entry| entry.url.as_str())
+            .collect();
+        assert_eq!(urls, ["https://old.example/"]);
+        assert_eq!(reopened.entries(HOME).len(), 1, "other Spaces keep theirs");
     }
 }

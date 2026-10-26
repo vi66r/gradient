@@ -151,6 +151,21 @@ impl Store {
             .unwrap_or_default()
     }
 
+    /// Every site in a profile with what it's allowed, by origin.
+    pub fn all(&self, profile: &[u8; 16]) -> Vec<(String, Vec<Kind>)> {
+        self.saved
+            .profiles
+            .get(&profile_key(profile))
+            .map(|sites| {
+                sites
+                    .iter()
+                    .filter(|(_, kinds)| !kinds.is_empty())
+                    .map(|(site, kinds)| (site.clone(), kinds.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Every site in a profile allowed one kind (notifications at startup).
     pub fn sites(&self, profile: &[u8; 16], kind: Kind) -> Vec<String> {
         self.saved

@@ -96,6 +96,24 @@ impl SearchEngine {
         }
     }
 
+    /// Where the engine suggests searches for `query` (OpenSearch JSON:
+    /// `["query", ["suggestion", …]]`).
+    pub fn suggestions(self, query: &str) -> String {
+        let (base, key) = match self {
+            Self::DuckDuckGo => ("https://duckduckgo.com/ac/?type=list", "q"),
+            Self::Google => (
+                "https://suggestqueries.google.com/complete/search?client=firefox",
+                "q",
+            ),
+            Self::Kagi => ("https://kagi.com/api/autosuggest", "q"),
+            Self::Bing => ("https://api.bing.com/osjson.aspx", "query"),
+            Self::Brave => ("https://search.brave.com/api/suggest", "q"),
+        };
+        let mut url = url::Url::parse(base).expect("suggestion addresses are valid");
+        url.query_pairs_mut().append_pair(key, query);
+        url.into()
+    }
+
     pub fn search(self, query: &str) -> String {
         let mut url = url::Url::parse(self.base()).expect("search engine addresses are valid");
         url.query_pairs_mut().append_pair("q", query);

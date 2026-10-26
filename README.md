@@ -38,10 +38,12 @@ Normal app state lives in `~/Library/Application Support/RafiBrowser`. A profile
   - Private tabs can hand off too.
 - Manual suspension under **Tools → Suspend Current Tab**. Resuming reloads the URL.
 - System WebKit's GPU rendering; the local WebGPU cube renders successfully on the tested Mac. No application-side screenshot or texture-copy pipeline.
+- **Settings** (⌘, or the gear in the sidebar footer) and **History** (⌘Y or the clock) open in the page card, as the Request Lab does. Settings holds the default browser, the search engine and search suggestions for every Space, and the current Space's history, website data, site permissions (agent trust included) and extensions. History lists the Space's pages by day, searchable, with each removable and recent ranges clearable.
+- Address suggestions from history, open tabs and, unless turned off in Settings, the search engine. Only searches are sent to the engine (never addresses), without cookies, and never from the Private Space.
 - Native **Request lab**: HTTP methods, custom headers and body, status/timing/size, formatted JSON responses, and cURL export. Requests run off the UI thread, have a 30-second timeout, and cap displayed responses at 2 MiB. Redirects are returned for inspection rather than automatically followed.
 - WebKit Inspector and a small opt-in local MCP server.
 
-On Mac, use ⌘T, ⌘O (open file), ⌘W, ⌘⇧T, ⌘L, ⌘R, ⌘[ / ⌘], Control-Tab, **⌘⇧C** (copy URL), ⌘⇧N (private tab), ⌘⇧J (request lab), and ⌘⌥I (Inspector). Linux uses Control in place of Command.
+On Mac, use ⌘T, ⌘O (open file), ⌘W, ⌘⇧T, ⌘L, ⌘R, ⌘[ / ⌘], Control-Tab, **⌘⇧C** (copy URL), ⌘⇧N (private tab), ⌘⇧J (request lab), ⌘Y (history), ⌘, (settings), and ⌘⌥I (Inspector). Linux uses Control in place of Command.
 
 Request lab data stays in memory and is separate from page cookies and sessions. cURL exports can contain credentials you entered; copying is explicit. Collections, environments, cURL import, and request cancellation are not implemented yet. Proxyman-style interception remains a later milestone.
 

@@ -1,6 +1,6 @@
-//! App-wide preferences in `settings.json`, chosen from menus until a
-//! Settings window exists. A missing or unreadable file means the defaults;
-//! the next change replaces it.
+//! App-wide preferences in `settings.json`, chosen in Settings (and the
+//! Browser menu). A missing or unreadable file means the defaults; the next
+//! change replaces it.
 use crate::model::SearchEngine;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -10,12 +10,29 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     /// An engine this build doesn't know (a newer version's) reads as the
     /// default instead of discarding the file's other settings.
     #[serde(default, deserialize_with = "lenient")]
     pub search: SearchEngine,
+    /// Ask the search engine for suggestions while typing in the address
+    /// field (never in the Private Space). On unless turned off (Rafi).
+    #[serde(default = "on")]
+    pub suggest_searches: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            search: SearchEngine::default(),
+            suggest_searches: true,
+        }
+    }
+}
+
+fn on() -> bool {
+    true
 }
 
 fn lenient<'de, D: serde::Deserializer<'de>>(value: D) -> Result<SearchEngine, D::Error> {
@@ -53,13 +70,19 @@ mod tests {
     fn the_search_engine_persists_and_unknown_ones_fall_back() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(Settings::load(dir.path()).search, SearchEngine::DuckDuckGo);
+        assert!(Settings::load(dir.path()).suggest_searches);
         let settings = Settings {
             search: SearchEngine::Kagi,
+            suggest_searches: false,
         };
         settings.save(dir.path()).unwrap();
         assert_eq!(Settings::load(dir.path()), settings);
         fs::write(path(dir.path()), br#"{"search": "altavista"}"#).unwrap();
         assert_eq!(Settings::load(dir.path()).search, SearchEngine::DuckDuckGo);
+        assert!(
+            Settings::load(dir.path()).suggest_searches,
+            "older files say nothing"
+        );
         fs::write(path(dir.path()), b"not json").unwrap();
         assert_eq!(Settings::load(dir.path()), Settings::default());
     }
