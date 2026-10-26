@@ -86,9 +86,19 @@ const NORMAL: Duration = Duration::from_millis(200);
 pub(crate) struct TabJoin {
     /// The tab list's visible area; joins are clipped to it.
     list: Option<Bounds<Pixels>>,
-    /// Each joined cell, and how joined it is (0 to 1): the selected tab's,
-    /// and the last one's while it lets go.
-    cells: Vec<(Bounds<Pixels>, f32)>,
+    /// Each joined cell: its tab, bounds, how joined it is (0 to 1) and the
+    /// color where it meets the page. The selected tab's, and the last one's
+    /// while it lets go.
+    cells: Vec<(u64, Bounds<Pixels>, f32, Hsla)>,
+}
+
+impl TabJoin {
+    pub(crate) fn cell(&self, id: u64) -> Option<Bounds<Pixels>> {
+        self.cells
+            .iter()
+            .find(|(tab, ..)| *tab == id)
+            .map(|(_, bounds, ..)| *bounds)
+    }
 }
 
 pub(crate) type TabJoins = std::rc::Rc<std::cell::RefCell<TabJoin>>;
@@ -654,6 +664,20 @@ impl Browser {
             window,
             cx,
         );
+        // Where it meets the page, the selected cell takes the page's own
+        // color there, blending from the card's across its width.
+        let side = tab
+            .side
+            .filter(|_| selected && tab.page.is_some() && !self.lab);
+        let side_color: Hsla = motion::transition(
+            format!("tab-side-{}", tab.id),
+            Rgb::from(side.unwrap_or(p.card)),
+            Transition::new(NORMAL),
+            window,
+            cx,
+        )
+        .into();
+        let close_ink = side.map_or(p.muted, readable_on);
         let title: SharedString = if tab.saved.title.is_empty() {
             model::display_host(&tab.saved.url).into()
         } else {
@@ -819,7 +843,7 @@ impl Browser {
                     .items_center()
                     .justify_center()
                     .rounded(px(R_CONTROL - 4.))
-                    .text_color(rgb(p.muted))
+                    .text_color(rgb(close_ink))
                     .when(!selected, |d| {
                         d.opacity(0.).group_hover(group.clone(), |s| s.opacity(1.))
                     })
@@ -841,7 +865,14 @@ impl Browser {
             .flex_col()
             .relative()
             .cursor_pointer()
-            .bg(background)
+            .when(!selected, |d| d.bg(background))
+            .when(selected, |d| {
+                d.bg(linear_gradient(
+                    90.,
+                    linear_color_stop(background, 0.45),
+                    linear_color_stop(side_color, 0.96),
+                ))
+            })
             // Joined: square on the card's side, and reaching through the
             // list's inset to the card's edge.
             .when(selected, |d| {
@@ -856,7 +887,11 @@ impl Browser {
                 let join = self.tab_join.clone();
                 d.child(
                     canvas(
-                        move |bounds, _, _| join.borrow_mut().cells.push((bounds, joined)),
+                        move |bounds, _, _| {
+                            join.borrow_mut()
+                                .cells
+                                .push((id, bounds, joined, side_color))
+                        },
                         |_, _, _, _| {},
                     )
                     .absolute()
@@ -1212,6 +1247,18 @@ impl Render for Browser {
         // Every change to the tabs ends in a render, so extensions hear of
         // them here; unchanged tabs cost a comparison.
         self.sync_extension_tabs();
+        // The page beside the selected cell is sampled again whenever the
+        // cell or the page moved since (last frame's layout).
+        let active = &self.tabs[self.active];
+        let placed = self
+            .tab_join
+            .borrow()
+            .cell(active.id)
+            .zip(active.page.as_ref().map(|page| page.bounds()))
+            .map(|(cell, page)| (active.id, cell, page));
+        if placed.is_some() && placed != self.side_sampled {
+            self.request_side_sample(cx);
+        }
         *self.tab_join.borrow_mut() = TabJoin::default();
         let p = palette(self.dark);
         let reveal = motion::transition(
@@ -1374,20 +1421,23 @@ impl Render for Browser {
             .on_action(cx.listener(|this, action: &SetSearchEngine, _, cx| {
                 this.set_search_engine(action.engine, cx)
             }))
-            // The card's shadow, painted before the sidebar so the joined tab
-            // cell covers it, as if the cell were part of the card.
-            .child(
-                div()
-                    .absolute()
-                    .top(px(CONTROL_ZONE))
-                    .left(px(SIDEBAR))
-                    .right_0()
-                    .bottom_0()
-                    .rounded_tl(px(CARD_RADIUS))
-                    .rounded_tr(px(CARD_RADIUS))
-                    .rounded_bl(px(CARD_RADIUS))
-                    .shadow(panel_shadow(self.dark)),
-            )
+            // The card's shadow, left out across a joined tab cell's rows: the
+            // cell is part of the card there.
+            .child({
+                let join = self.tab_join.clone();
+                let dark = self.dark;
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        paint_card_shadow(bounds, &join.borrow(), dark, window)
+                    },
+                )
+                .absolute()
+                .top(px(CONTROL_ZONE))
+                .left(px(SIDEBAR))
+                .right_0()
+                .bottom_0()
+            })
             .child(self.sidebar(window, cx))
             .child(
                 div()
@@ -1458,10 +1508,9 @@ impl Render for Browser {
             )
             .child({
                 let join = self.tab_join.clone();
-                let card = hsla(p.card);
                 canvas(
                     |_, _, _| {},
-                    move |_, _, window, _| paint_tab_joins(&join.borrow(), card, window),
+                    move |_, _, window, _| paint_tab_joins(&join.borrow(), window),
                 )
                 .absolute()
                 .top_0()
@@ -1471,10 +1520,41 @@ impl Render for Browser {
     }
 }
 
+/// The card's shadow, in bands above and below each joined tab cell.
+fn paint_card_shadow(card: Bounds<Pixels>, join: &TabJoin, dark: bool, window: &mut Window) {
+    let radius = px(CARD_RADIUS);
+    let corners = Corners {
+        top_left: radius,
+        top_right: radius,
+        bottom_right: px(0.),
+        bottom_left: radius,
+    };
+    let shadows = panel_shadow(dark);
+    let viewport = window.viewport_size();
+    let mut gaps: Vec<_> = join
+        .cells
+        .iter()
+        .map(|(_, cell, ..)| (cell.top(), cell.bottom()))
+        .collect();
+    gaps.sort_by(|a, b| f32::from(a.0).total_cmp(&f32::from(b.0)));
+    let mut from = px(0.);
+    for (top, bottom) in gaps.into_iter().chain([(viewport.height, viewport.height)]) {
+        if top > from {
+            let band = ContentMask {
+                bounds: Bounds::from_corners(point(px(0.), from), point(viewport.width, top)),
+            };
+            window.with_content_mask(Some(band), |window| {
+                window.paint_drop_shadows(card, corners, &shadows)
+            });
+        }
+        from = from.max(bottom);
+    }
+}
+
 /// Joins the selected tab's cell to the page card, as a classic tab joins
 /// its page: the card's edge hairline is covered where the cell meets it,
 /// and concave curves above and below run the cell into the card's edge.
-fn paint_tab_joins(join: &TabJoin, card: Hsla, window: &mut Window) {
+fn paint_tab_joins(join: &TabJoin, window: &mut Window) {
     let Some(list) = join.list else {
         return;
     };
@@ -1489,7 +1569,7 @@ fn paint_tab_joins(join: &TabJoin, card: Hsla, window: &mut Window) {
         ),
     };
     window.with_content_mask(Some(mask), |window| {
-        for (cell, joined) in &join.cells {
+        for (_, cell, joined, color) in &join.cells {
             let (top, bottom) = (cell.top(), cell.bottom());
             let mut path = PathBuilder::fill();
             path.move_to(point(edge - r, top));
@@ -1510,7 +1590,7 @@ fn paint_tab_joins(join: &TabJoin, card: Hsla, window: &mut Window) {
             path.line_to(point(edge - px(1.), top));
             path.close();
             if let Ok(path) = path.build() {
-                window.paint_path(path, card.opacity(*joined));
+                window.paint_path(path, color.opacity(*joined));
             }
         }
     });
@@ -2427,6 +2507,20 @@ pub(crate) fn same_color(a: Option<u32>, b: Option<u32>) -> bool {
 /// The color behind a page: its own tint, else the card's.
 pub(crate) fn page_color(tint: Option<u32>, dark: bool) -> u32 {
     tint.unwrap_or(palette(dark).card)
+}
+
+/// Dark or light ink, whichever reads on `background` (`0xRRGGBB`).
+fn readable_on(background: u32) -> u32 {
+    let channel = |shift: u32| {
+        let value = ((background >> shift) & 0xff) as f32 / 255.;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
+    if luminance > 0.4 { 0x1d232c } else { 0xf2f3f5 }
 }
 
 /// A light veil of our palette over the system sidebar material, so the frost

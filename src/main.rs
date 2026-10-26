@@ -108,6 +108,9 @@ struct Tab {
     fade_pending: bool,
     /// A color reported while the page was held, applied when it shows.
     pending_tint: Option<Option<u32>>,
+    /// The page's color beside this tab's cell, when it's selected and
+    /// joined to the page (`engine::Event::SideColor`).
+    side: Option<u32>,
 }
 
 impl Tab {
@@ -137,6 +140,7 @@ impl Tab {
             committed: None,
             fade_pending: false,
             pending_tint: None,
+            side: None,
         }
     }
 }
@@ -240,6 +244,11 @@ struct Browser {
     address_primed: bool,
     /// Where a press on the resting address began, until it clicks or drags.
     address_press: Option<Point<Pixels>>,
+    /// The tab, cell and page bounds the page's side color was last
+    /// sampled for; when either moves, it's sampled again.
+    pub(crate) side_sampled: Option<(u64, Bounds<Pixels>, Bounds<Pixels>)>,
+    /// A side sample is scheduled.
+    side_due: bool,
     discard_pending: bool,
     #[cfg(target_os = "macos")]
     termination: Option<engine::TerminationGuard>,
@@ -357,6 +366,8 @@ impl Browser {
         let (events, received) = async_channel::bounded(256);
         #[cfg(target_os = "macos")]
         engine::watch_native_clicks(events.clone());
+        #[cfg(target_os = "macos")]
+        engine::watch_page_input(events.clone());
         cx.spawn_in(window, async move |this, cx| {
             while let Ok(event) = received.recv().await {
                 if this
@@ -414,6 +425,8 @@ impl Browser {
             copy_epoch: 0,
             address_primed: false,
             address_press: None,
+            side_sampled: None,
+            side_due: false,
             discard_pending: false,
             #[cfg(target_os = "macos")]
             termination: None,
@@ -1512,6 +1525,41 @@ impl Browser {
         cx.notify();
     }
 
+    /// Samples the selected page's color beside its tab's cell soon, at most
+    /// every `SIDE_SAMPLE`, so a scroll or a burst of events costs a few
+    /// tiny snapshots rather than one per event.
+    pub(crate) fn request_side_sample(&mut self, cx: &mut Context<Self>) {
+        const SIDE_SAMPLE: Duration = Duration::from_millis(90);
+        if self.side_due {
+            return;
+        }
+        self.side_due = true;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SIDE_SAMPLE).await;
+            let _ = this.update(cx, |this, _| {
+                this.side_due = false;
+                this.sample_side();
+            });
+        })
+        .detach();
+    }
+
+    fn sample_side(&mut self) {
+        let tab = &self.tabs[self.active];
+        let (Some(page), Some(cell)) = (&tab.page, self.tab_join.borrow().cell(tab.id)) else {
+            return;
+        };
+        if self.lab {
+            return;
+        }
+        let page_top = page.bounds().top();
+        page.sample_side(
+            f64::from(cell.top() - page_top),
+            f64::from(cell.bottom() - page_top),
+        );
+        self.side_sampled = Some((tab.id, cell, page.bounds()));
+    }
+
     /// A page that never reports its first paint still shows, after a beat.
     fn fade_in_late(&mut self, id: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
@@ -1637,8 +1685,26 @@ impl Browser {
             }
             engine::Event::Snapshot { id, image } => self.page_snapshot(id, image),
             engine::Event::MediaChanged(id) => self.media_changed(id, cx),
-            engine::Event::PageTint(id, tint, definite) => self.settle_tint(id, tint, definite, cx),
-            engine::Event::Painted(id) => self.reveal(id, cx),
+            engine::Event::PageTint(id, tint, definite) => {
+                self.settle_tint(id, tint, definite, cx);
+                self.request_side_sample(cx);
+            }
+            engine::Event::Painted(id) => {
+                self.reveal(id, cx);
+                self.request_side_sample(cx);
+            }
+            engine::Event::SideColor(id, color) => {
+                if let Some(tab) = self.tab_mut(id)
+                    && !ui::same_color(tab.side, color)
+                {
+                    tab.side = color;
+                    cx.notify();
+                }
+            }
+            engine::Event::PageInput => {
+                engine::page_input_seen();
+                self.request_side_sample(cx);
+            }
             engine::Event::Committed(id) => {
                 self.follow_site_zoom(id);
                 self.record_visit(id);
