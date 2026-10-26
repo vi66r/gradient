@@ -1595,7 +1595,7 @@ fn paint_tab_joins(join: &TabJoin, outline: Hsla, window: &mut Window) {
                 window.paint_path(path, color.opacity(*joined));
             }
             if let Ok(path) = tab_outline(*cell, edge, r).build() {
-                window.paint_path(path, outline.opacity(outline.a * joined));
+                window.paint_path(path, outline.opacity(*joined));
             }
         }
     });
