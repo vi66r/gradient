@@ -85,6 +85,9 @@ struct Tab {
     page: Option<Rc<engine::Page>>,
     error: Option<String>,
     grant: Option<(String, u64)>,
+    /// When an agent on a trusted site navigated the tab: that navigation
+    /// leaves without the unsaved-work prompt (trusted agents act freely).
+    agent_navigated: Option<std::time::Instant>,
     /// Present while the tab plays (or was paused from the sidebar); drives
     /// the expanded sidebar cell.
     media: Option<TabMedia>,
@@ -131,6 +134,7 @@ impl Tab {
             page: None,
             error: None,
             grant: None,
+            agent_navigated: None,
             zoom: 1.,
             opener: None,
             declined: Vec::new(),
@@ -1571,6 +1575,14 @@ impl Browser {
                 self.request_discard(lifecycle::Discard::Quit, window, cx)
             }
             engine::Event::NavigationDecision { id, reply } => {
+                let agent = self
+                    .tab_mut(id)
+                    .and_then(|tab| tab.agent_navigated.take())
+                    .is_some_and(|at| at.elapsed() < Duration::from_secs(5));
+                if agent {
+                    let _ = reply.try_send(true);
+                    return;
+                }
                 if self.discard_pending
                     || !self
                         .tabs
@@ -1634,7 +1646,11 @@ impl Browser {
             engine::Event::Snapshot { id, image } => self.page_snapshot(id, image),
             engine::Event::MediaChanged(id) => self.media_changed(id, cx),
             engine::Event::PageTint(id, tint, definite) => self.settle_tint(id, tint, definite, cx),
-            engine::Event::Painted(id) => self.reveal(id, cx),
+            engine::Event::Painted(id) => {
+                self.reveal(id, cx);
+                #[cfg(debug_assertions)]
+                self.test_agent_access(id);
+            }
             engine::Event::Committed(id) => {
                 self.follow_site_zoom(id);
                 self.record_visit(id);
@@ -1808,13 +1824,6 @@ impl Browser {
                     self.release_address(window, cx);
                 }
             }
-            engine::Event::AgentResult {
-                id,
-                epoch,
-                origin,
-                reply,
-                value,
-            } => self.finish_agent(id, epoch, origin, reply, value),
             engine::Event::Extension(event) => self.extension_event(event, window, cx),
         }
         cx.notify();
@@ -2495,8 +2504,8 @@ fn main() -> anyhow::Result<()> {
         cx.spawn(async move |cx| {
             while let Ok(command) = agent_receive.recv().await {
                 if handle
-                    .update(cx, |_, _, cx| {
-                        agent_view.update(cx, |this, cx| this.agent_command(command, cx))
+                    .update(cx, |_, window, cx| {
+                        agent_view.update(cx, |this, cx| this.agent_command(command, window, cx))
                     })
                     .is_err()
                 {

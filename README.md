@@ -29,7 +29,7 @@ Normal app state lives in `~/Library/Application Support/RafiBrowser`. A profile
 - Site icons in the sidebar. After a normal tab loads, the shell reads the page's declared icon, fetches it without cookies (256 KiB cap), and caches it per host in the profile's `icons/` folder for 7 days, keeping at most 500. Private tabs never fetch icons.
 - Media controls in the sidebar (macOS). When a tab plays audio, its cell expands with play/pause and a page mute that also covers Web Audio and cross-origin frames, including for background tabs. Pages that publish a Media Session (Spotify, YouTube, SoundCloud) also get previous/next track buttons, which run the page's own handlers. A cell you paused stays so you can resume; otherwise it collapses about 2.5 s after playback stops. Playback state and mute use WebKit private SPI (`_isPlayingAudio`, `_setPageMuted:`), as Safari does. Track skips use `navigator.mediaSession` from an isolated script world, which pages can't observe. Each selector is checked first, so the feature switches off if WebKit removes one.
 - Private tabs use ephemeral engine storage, are omitted from saved sessions and recently closed tabs, and cannot be shared with agents.
-- On macOS, closing, suspending, returning to the start screen, quitting, and browser-initiated navigation (Back/Forward including swipes, Reload, addresses loaded from the address field or an agent) check for edits the user made. Only work the user produced counts: typing or changes in form fields (search fields excepted), rich-text edits, and clicks or typing inside content Browser can't inspect. Settled pages proceed quietly. A page's own links, redirects and frame loads are never delayed or guarded. Cancel preserves the page. Quit also checks Request Lab drafts; session-write failures require a separate explicit choice. See the work-protection limits below.
+- On macOS, closing, suspending, returning to the start screen, quitting, and browser-initiated navigation (Back/Forward including swipes, Reload, addresses loaded from the address field or an agent in a shared tab; agents on trusted sites skip it) check for edits the user made. Only work the user produced counts: typing or changes in form fields (search fields excepted), rich-text edits, and clicks or typing inside content Browser can't inspect. Settled pages proceed quietly. A page's own links, redirects and frame loads are never delayed or guarded. Cancel preserves the page. Quit also checks Request Lab drafts; session-write failures require a separate explicit choice. See the work-protection limits below.
 - App links, as in Safari (macOS). When a page's link, form or redirect goes to a non-web scheme (`mailto:`, `tel:`, `sms:`, `facetime:`, `zoommtg:`, `slack:`, `spotify:`, `vscode:`…), WebKit cancels the navigation and Browser asks "Open “Mail”?", naming the site and the scheme. Cancel is the default; Open hands the link to the app macOS has registered. A link typed into the address field takes the same path.
   - Only the active tab's main frame can ask. Embedded frames, such as ads, are cancelled silently.
   - One prompt per tab at a time. After Cancel, that tab can't ask for the same scheme again until its next page commits.
@@ -62,13 +62,18 @@ Keep Browser running. Configure your MCP client to start this stdio command (rep
 
 For a development profile, set the client's `BROWSER_DATA_DIR` environment variable to the same value as the app. The bridge does not start the GUI or acquire its profile lock.
 
-Click **Share tab with agent** inside Browser and confirm the specific origin. Initially, clients see no tabs. Tools are `browser_tabs`, `browser_read_page`, `browser_navigate`, `browser_click`, and `browser_fill`. Selectors must match exactly one visible, enabled element. Password and file inputs are excluded from fill; arbitrary JavaScript evaluation and shell execution are not exposed. Page text is untrusted website data.
+Agents see nothing until you open a tab to them with the agent button (beside Request Lab) or a tab's agent icon. There are two levels, and only you can grant either, in Browser:
 
-Grants are in memory, scoped to a tab and exact origin (scheme/host/port), and revoked on explicit revocation, cross-origin navigation, suspension, closing, or app exit. Agent navigation is restricted to the granted origin. Action results are checked again before returning. A page click can still cause a consequential website action, so the agent must obtain the user's authorization for that action.
+- **Shared** (untrusted): one tab, in memory, on its exact origin (scheme/host/port), until you stop it, the tab changes origin, is suspended or closed, or Browser quits. Agents read only the text a person can see (hidden, off-screen, tiny, transparent and background-colored text is left out), click and type as real input (`isTrusted` events, which need the tab on screen; otherwise they fall back to scripted events and say so), and stay on the origin. Before a click that may submit or change something (a form's submit button, or labels like Pay, Send, Delete), Browser asks you. Password and file fields can't be filled. The card glows in the accent color.
+- **Trusted**: a site you trust, remembered with its site permissions (per Space) until you stop trusting it there or reset the site's permissions. Every tab on it is open to agents, with no prompts: screenshots, HTML and an accessibility outline, console messages and uncaught errors, network loads (URL, method, status, type, size, time), JavaScript in the page, real key presses (tab in front), uploads of local files (25 MB in all), and navigation anywhere, skipping the unsaved-work prompt. The card glows amber. Trust only sites you develop or fully control.
 
-`browser_navigate` acknowledges `navigation_requested`, not a completed load: a local confirmation may still be required. Mutation tools return an error while a page check or confirmation is pending; callers can retry after the user decides. Read access remains subject to the existing grant checks.
+Agent scripts run in a WebKit content world of their own, which shares the page's document but none of its JavaScript, so a page can't rewrite what an agent reads or detect it reading. Their inputs travel as data, never spliced into code. The console hook and network log run only while a site is trusted. Each action checks the tab's access before every step, so stopping access in Browser stops an action partway; a brief brightening of the card's glow shows each one.
 
-The transport is a Unix socket with mode `0600` inside a `0700` profile directory, with bounded messages, concurrency, and request deadlines. There is no TCP listener or website-to-native command bridge. This restricts access to your OS account, **not to one particular agent client**: any process running as you can connect and access currently shared tabs. A local transport does not imply the model runs locally.
+Tools: `browser_tabs`, `browser_read_page`, `browser_navigate`, `browser_click`, `browser_fill` for both levels; `browser_screenshot`, `browser_read_dom`, `browser_console`, `browser_network`, `browser_eval`, `browser_press_key`, `browser_upload` for trusted sites. Selectors must match exactly one element. Page content is untrusted website data.
+
+`browser_navigate` acknowledges `navigation_requested`, not a completed load: in a shared tab a local confirmation may still be required. Actions return an error while a page check or confirmation is pending; callers can retry after the user decides.
+
+The transport is a Unix socket with mode `0600` inside a `0700` profile directory, with bounded messages, concurrency, and request deadlines. There is no TCP listener or website-to-native command bridge. This restricts access to your OS account, **not to one particular agent client**: any process running as you can connect and use tabs that are shared or on trusted sites. A local transport does not imply the model runs locally.
 
 ## Development checks
 
@@ -97,6 +102,12 @@ Open `http://127.0.0.1:8765/` for text input, tab preservation, links, scroll, a
 python3 scripts/check-mcp.py --profile /tmp/browser-dev
 # After sharing only the localhost interaction-test tab:
 python3 scripts/check-mcp.py --profile /tmp/browser-dev --shared-fixture
+```
+
+For agent access end to end, run a debug build against the fixture server with `BROWSER_TEST_AGENT=share` or `trust` (debug builds only: it opens the loopback fixture page to agents without the prompts), open `http://127.0.0.1:8765/agent`, keep the window on screen, and run:
+
+```bash
+python3 scripts/check-agent.py --profile /tmp/browser-dev --mode share
 ```
 
 The shared-fixture check changes only the disposable fixture's counter and text input. The default check verifies no tabs are exposed. See [VALIDATION.md](VALIDATION.md) for what was actually exercised.

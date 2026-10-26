@@ -84,7 +84,9 @@ fn hsla(color: u32) -> Hsla {
 impl Browser {
     fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(self.dark);
-        let grant = self.tabs[self.active].grant.is_some();
+        let access = self.agent_access(&self.tabs[self.active]);
+        let grant = access.is_some();
+        let agent_ink = agent_color(p, self.dark, access.as_ref().is_some_and(|a| a.trusted()));
         div()
             .flex()
             .flex_col()
@@ -202,10 +204,12 @@ impl Browser {
                             .child(
                                 icon_button(
                                     "agent-access",
-                                    if grant {
-                                        "Agents can see this tab. Click to revoke."
-                                    } else {
-                                        "Share this tab with agents"
+                                    match &access {
+                                        Some(access) if access.trusted() => {
+                                            "Agents have full access to this site. Click to stop trusting it."
+                                        }
+                                        Some(_) => "Agents can see this tab. Click to stop sharing.",
+                                        None => "Share this tab with agents",
                                     },
                                     IconName::Bot,
                                     p,
@@ -213,7 +217,7 @@ impl Browser {
                                 .size(px(32.))
                                 .rounded(px(R_CONTROL))
                                 .when(grant, |d| {
-                                    d.bg(rgba((p.accent << 8) | 0x24)).text_color(rgb(p.accent))
+                                    d.bg(rgba((agent_ink << 8) | 0x24)).text_color(rgb(agent_ink))
                                 })
                                 .on_click(cx.listener(|this, _, w, cx| this.toggle_agent(w, cx))),
                             ),
@@ -748,23 +752,33 @@ impl Browser {
                     .child(title.clone()),
             )
             // Shared with agents: says so in the tab itself; a click stops it.
-            .when(tab.grant.is_some(), |header| {
+            // Open to agents: says so in the tab itself; a click stops it.
+            .when_some(self.agent_access(tab), |header, access| {
+                let trusted = access.trusted();
                 header.child(
                     div()
                         .id(("tab-shared", tab.id))
                         .role(Role::Button)
-                        .aria_label("Stop sharing with agents")
+                        .aria_label(if trusted {
+                            "Stop trusting agents on this site"
+                        } else {
+                            "Stop sharing with agents"
+                        })
                         .size(px(22.))
                         .flex_shrink_0()
                         .flex()
                         .items_center()
                         .justify_center()
                         .rounded(px(R_CONTROL - 4.))
-                        .text_color(rgb(p.accent))
+                        .text_color(rgb(agent_color(p, self.dark, trusted)))
                         .hover(|s| s.bg(rgb(p.hover)))
-                        .tooltip(|window, cx| {
-                            Tooltip::new("Shared with agents. Click to stop sharing.")
-                                .build(window, cx)
+                        .tooltip(move |window, cx| {
+                            Tooltip::new(if trusted {
+                                "Trusted for agents: full access. Click to stop trusting."
+                            } else {
+                                "Shared with agents. Click to stop sharing."
+                            })
+                            .build(window, cx)
                         })
                         .child(Icon::new(IconName::Bot).size_3p5())
                         .on_click(cx.listener(move |this, _, w, cx| {
@@ -1159,11 +1173,16 @@ impl Render for Browser {
         // them here; unchanged tabs cost a comparison.
         self.sync_extension_tabs();
         let p = palette(self.dark);
-        // A shared tab's card glows (see `engine::Page::set_shared`).
+        // A card open to agents glows: accent when shared, amber when its
+        // site is trusted (see `engine::Page::set_shared`). Trusted pages
+        // also keep the console and network logs agents can read.
         let pulse = !cx.reduce_motion();
-        for tab in &self.tabs {
+        for tab in self.all_tabs() {
             if let Some(page) = &tab.page {
-                page.set_shared(tab.grant.as_ref().map(|_| (p.accent, pulse)));
+                let access = self.agent_access(tab);
+                let trusted = access.as_ref().is_some_and(|access| access.trusted());
+                page.set_shared(access.map(|_| (agent_color(p, self.dark, trusted), pulse)));
+                page.set_agent_trust(trusted);
             }
         }
         let reveal = motion::transition(
@@ -2303,6 +2322,15 @@ pub(crate) fn same_color(a: Option<u32>, b: Option<u32>) -> bool {
             .iter()
             .all(|shift| ((a >> shift) & 0xff).abs_diff((b >> shift) & 0xff) <= 4),
         (a, b) => a == b,
+    }
+}
+
+/// Agents' color: the accent for a shared tab, amber for a trusted site.
+fn agent_color(p: Palette, dark: bool, trusted: bool) -> u32 {
+    match (trusted, dark) {
+        (false, _) => p.accent,
+        (true, false) => 0xd97706,
+        (true, true) => 0xf59e0b,
     }
 }
 

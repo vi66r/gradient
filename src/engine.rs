@@ -107,13 +107,6 @@ pub enum Event {
     /// A primary click in window coordinates (top-left origin) that native
     /// views may consume before GPUI sees it.
     NativeClick(Point<Pixels>),
-    AgentResult {
-        id: u64,
-        epoch: u64,
-        origin: String,
-        reply: std::sync::mpsc::SyncSender<Result<serde_json::Value, String>>,
-        value: String,
-    },
     /// Something a web extension did or asked for; see `extensions.rs`.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Extension(ExtensionEvent),
@@ -665,6 +658,9 @@ pub struct Page {
     _theme: theme::Theme,
     #[cfg(target_os = "macos")]
     find: find::Find,
+    /// Agents' access to the page: isolated scripts, real input, logs.
+    #[cfg(target_os = "macos")]
+    agent: agent::Agent,
     visible: Cell<bool>,
     bounds: Cell<Bounds<Pixels>>,
     #[cfg(target_os = "macos")]
@@ -680,6 +676,8 @@ pub struct Page {
     /// breathes, and the glow itself once the page has a host.
     #[cfg(target_os = "macos")]
     shared: Cell<Option<(u32, bool)>>,
+    #[cfg(target_os = "macos")]
+    agent_trusted: Cell<bool>,
     #[cfg(target_os = "macos")]
     glow: std::cell::RefCell<Option<objc2::rc::Retained<glow::Glow>>>,
 }
@@ -876,6 +874,8 @@ impl Page {
         let dropped = protection::Dropped::default();
         let drop_record = dropped.clone();
         let inherited = opened.is_some();
+        // A popup or extension page shares its content controller.
+        let own_configuration = !inherited && extension.is_none();
         let configuration = opened
             .or(extension)
             .unwrap_or_else(|| page_configuration(private, profile));
@@ -933,6 +933,7 @@ impl Page {
             id,
             host.events.clone(),
         );
+        let agent = agent::Agent::install(&view, own_configuration);
         let theme = theme::Theme::install(
             objc2::rc::Retained::into_super(view),
             id,
@@ -946,6 +947,7 @@ impl Page {
             _theme: theme,
             #[cfg(target_os = "macos")]
             find,
+            agent,
             visible: Cell::new(false),
             bounds: Cell::new(Bounds::default()),
             executor: host.foreground.clone(),
@@ -953,6 +955,7 @@ impl Page {
             host: std::cell::RefCell::new(None),
             backdrop: Cell::new(0xffffff),
             shared: Cell::new(None),
+            agent_trusted: Cell::new(false),
             glow: std::cell::RefCell::new(None),
         }))
     }
@@ -1202,6 +1205,91 @@ impl Page {
         }
         #[cfg(not(target_os = "macos"))]
         let _ = look;
+    }
+
+    /// Runs an agent's script (an async function body; `args` is JSON) in
+    /// the agent's own content world, or the page's for trusted code.
+    pub fn agent_call(
+        &self,
+        body: &str,
+        args: &str,
+        page_world: bool,
+        done: impl FnOnce(Result<String, String>) + 'static,
+    ) {
+        #[cfg(target_os = "macos")]
+        self.agent.call(body, args, page_world, done);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (body, args, page_world);
+            done(Err("Agents need macOS for now.".into()));
+        }
+    }
+
+    /// Whether real input can reach the page (it's on screen).
+    pub fn agent_can_input(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        return self.agent.can_input();
+        #[cfg(not(target_os = "macos"))]
+        false
+    }
+
+    /// A real click at a viewport point, in CSS pixels.
+    pub fn agent_click(&self, x: f64, y: f64) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        return self.agent.click(x, y);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (x, y);
+            Err("Agents need macOS for now.".into())
+        }
+    }
+
+    /// Real text input into the focused element.
+    pub fn agent_type(&self, text: &str) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        return self.agent.type_text(text);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = text;
+            Err("Agents need macOS for now.".into())
+        }
+    }
+
+    /// A real key press.
+    pub fn agent_press(&self, key: &str, modifiers: &[&str]) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        return self.agent.press(key, modifiers);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (key, modifiers);
+            Err("Agents need macOS for now.".into())
+        }
+    }
+
+    /// A base64 PNG of the visible page.
+    pub fn agent_screenshot(&self, done: impl FnOnce(Result<String, String>) + 'static) {
+        #[cfg(target_os = "macos")]
+        self.agent.screenshot(done);
+        #[cfg(not(target_os = "macos"))]
+        done(Err("Agents need macOS for now.".into()));
+    }
+
+    /// The trusted page's console messages and network loads.
+    pub fn agent_logs(&self) -> (serde_json::Value, serde_json::Value) {
+        #[cfg(target_os = "macos")]
+        return (self.agent.console(), self.agent.network());
+        #[cfg(not(target_os = "macos"))]
+        (serde_json::Value::Null, serde_json::Value::Null)
+    }
+
+    /// Starts or stops the trusted-only logs as the site's trust changes.
+    pub fn set_agent_trust(&self, trusted: bool) {
+        #[cfg(target_os = "macos")]
+        if self.agent_trusted.replace(trusted) != trusted {
+            self.agent.set_trusted(trusted);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = trusted;
     }
 
     /// An agent acted in the tab: its glow brightens for a moment.
@@ -1759,6 +1847,8 @@ mod notifications;
 #[cfg(target_os = "macos")]
 mod site;
 
+#[cfg(target_os = "macos")]
+mod agent;
 #[cfg(target_os = "macos")]
 mod extensions;
 #[cfg(target_os = "macos")]

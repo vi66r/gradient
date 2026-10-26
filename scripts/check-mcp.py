@@ -33,7 +33,7 @@ try:
     rpc('initialize', {'protocolVersion': '2025-11-25', 'capabilities': {},
                        'clientInfo': {'name': 'browser-fixture-check', 'version': '1'}})
     listed = rpc('tools/list', {})
-    assert len(listed['tools']) == 5
+    assert len(listed['tools']) == 12
     tabs = tool('browser_tabs', {})['tabs']
     if not args.shared_fixture:
         assert tabs == [], 'Revoke test tab sharing before the default check.'

@@ -15,6 +15,9 @@ pub enum Kind {
     Screen,
     Location,
     Notifications,
+    /// Trusted by the user for agents: full access, in any tab on the site
+    /// (`agent.rs`). Only ever granted from Browser's own UI.
+    Agents,
 }
 
 impl Kind {
@@ -35,6 +38,7 @@ impl Kind {
             Kind::Screen => "screen",
             Kind::Location => "location",
             Kind::Notifications => "notifications",
+            Kind::Agents => "agent access",
         }
     }
 }
@@ -183,6 +187,25 @@ impl Store {
             if sites.is_empty() {
                 self.saved.profiles.remove(&key);
             }
+        }
+        self.write()
+    }
+
+    /// Withdraws one kind from a site, keeping the rest.
+    pub fn revoke(&mut self, profile: &[u8; 16], site: &str, kind: Kind) -> Result<()> {
+        let key = profile_key(profile);
+        let Some(sites) = self.saved.profiles.get_mut(&key) else {
+            return Ok(());
+        };
+        let Some(kinds) = sites.get_mut(site) else {
+            return Ok(());
+        };
+        kinds.retain(|granted| *granted != kind);
+        if kinds.is_empty() {
+            sites.remove(site);
+        }
+        if sites.is_empty() {
+            self.saved.profiles.remove(&key);
         }
         self.write()
     }
