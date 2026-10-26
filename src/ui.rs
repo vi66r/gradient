@@ -1508,7 +1508,10 @@ impl Render for Browser {
             )
             .child({
                 let join = self.tab_join.clone();
-                let outline = panel_edge(self.dark);
+                // The card's outline as it looks: its hairline over the
+                // card's color. Opaque, so it reads the same over a join in
+                // the page's color as along the card.
+                let outline = over(panel_edge(self.dark), hsla(p.card));
                 canvas(
                     |_, _, _| {},
                     move |_, _, window, _| paint_tab_joins(&join.borrow(), outline, window),
@@ -2605,6 +2608,19 @@ fn space_color(space: &spaces::Space, dark: bool) -> u32 {
         .copied()
         .unwrap_or(SPACE_COLORS[0]);
     if dark { night } else { light }
+}
+
+/// `top` composited over opaque `under`, as one opaque color.
+fn over(top: Hsla, under: Hsla) -> Hsla {
+    let (top, under) = (Rgba::from(top), Rgba::from(under));
+    let mix = |a: f32, b: f32| a * top.a + b * (1. - top.a);
+    Rgba {
+        r: mix(top.r, under.r),
+        g: mix(top.g, under.g),
+        b: mix(top.b, under.b),
+        a: 1.,
+    }
+    .into()
 }
 
 /// A translucent hairline, so the edge reads as light rather than a stroke.
