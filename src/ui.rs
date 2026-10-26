@@ -747,6 +747,32 @@ impl Browser {
                     .text_color(rgb(if selected { p.ink } else { p.muted }))
                     .child(title.clone()),
             )
+            // Shared with agents: says so in the tab itself; a click stops it.
+            .when(tab.grant.is_some(), |header| {
+                header.child(
+                    div()
+                        .id(("tab-shared", tab.id))
+                        .role(Role::Button)
+                        .aria_label("Stop sharing with agents")
+                        .size(px(22.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(R_CONTROL - 4.))
+                        .text_color(rgb(p.accent))
+                        .hover(|s| s.bg(rgb(p.hover)))
+                        .tooltip(|window, cx| {
+                            Tooltip::new("Shared with agents. Click to stop sharing.")
+                                .build(window, cx)
+                        })
+                        .child(Icon::new(IconName::Bot).size_3p5())
+                        .on_click(cx.listener(move |this, _, w, cx| {
+                            cx.stop_propagation();
+                            this.toggle_agent_for(index, w, cx);
+                        })),
+                )
+            })
             .child(
                 div()
                     .id(("close-tab", tab.id))
@@ -1133,6 +1159,13 @@ impl Render for Browser {
         // them here; unchanged tabs cost a comparison.
         self.sync_extension_tabs();
         let p = palette(self.dark);
+        // A shared tab's card glows (see `engine::Page::set_shared`).
+        let pulse = !cx.reduce_motion();
+        for tab in &self.tabs {
+            if let Some(page) = &tab.page {
+                page.set_shared(tab.grant.as_ref().map(|_| (p.accent, pulse)));
+            }
+        }
         let reveal = motion::transition(
             "suggestions",
             if self.suggest.shown() { 1. } else { 0. },

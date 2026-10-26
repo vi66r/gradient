@@ -15,8 +15,9 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         let tab = &mut self.tabs[index];
+        // The tab's agent icon and its card's glow show the state; the
+        // footer stays for problems.
         if tab.grant.take().is_some() {
-            self.notice = Some("Agent access revoked.".into());
             cx.notify();
             return;
         }
@@ -66,8 +67,6 @@ impl Browser {
                     {
                         this.grant_epoch += 1;
                         tab.grant = Some((origin, this.grant_epoch));
-                        this.notice =
-                            Some("Tab shared. Use Revoke agent access to disconnect it.".into());
                         cx.notify();
                     }
                 });
@@ -173,6 +172,8 @@ impl Browser {
             mcp::origin(&page.url()?).as_ref() == Some(&origin),
             "Tab changed origin"
         );
+        // Every agent action shows as a brief brightening of the card's glow.
+        page.agent_flare();
         if command.name == "browser_navigate" {
             let url = args["url"]
                 .as_str()
@@ -199,7 +200,6 @@ impl Browser {
                     value,
                 });
             })?;
-        self.notice = Some(format!("Agent used {}.", command.name));
         Ok(None)
     }
 

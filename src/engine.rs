@@ -676,6 +676,12 @@ pub struct Page {
     /// The page's color, painted behind it (`fade::set_backdrop`).
     #[cfg(target_os = "macos")]
     backdrop: Cell<u32>,
+    /// While the tab is shared with agents: the glow's accent and whether it
+    /// breathes, and the glow itself once the page has a host.
+    #[cfg(target_os = "macos")]
+    shared: Cell<Option<(u32, bool)>>,
+    #[cfg(target_os = "macos")]
+    glow: std::cell::RefCell<Option<objc2::rc::Retained<glow::Glow>>>,
 }
 
 impl Drop for Page {
@@ -946,6 +952,8 @@ impl Page {
             attaching: Cell::new(false),
             host: std::cell::RefCell::new(None),
             backdrop: Cell::new(0xffffff),
+            shared: Cell::new(None),
+            glow: std::cell::RefCell::new(None),
         }))
     }
 
@@ -1179,6 +1187,64 @@ impl Page {
         }
     }
 
+    /// Shows the card's glow in `accent` (`0xRRGGBB`) while the tab is shared
+    /// with agents, breathing unless `pulse` is off; `None` removes it.
+    pub fn set_shared(&self, look: Option<(u32, bool)>) {
+        #[cfg(target_os = "macos")]
+        {
+            if self.shared.replace(look) == look {
+                return;
+            }
+            if let Some(glow) = self.glow.borrow_mut().take() {
+                glow.removeFromSuperview();
+            }
+            self.update_glow();
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = look;
+    }
+
+    /// An agent acted in the tab: its glow brightens for a moment.
+    pub fn agent_flare(&self) {
+        #[cfg(target_os = "macos")]
+        if let Some(glow) = self.glow.borrow().as_ref() {
+            glow.flare();
+        }
+    }
+
+    /// Fits the glow to the page's host, creating it when the tab is shared.
+    #[cfg(target_os = "macos")]
+    fn update_glow(&self) {
+        let Some((accent, pulse)) = self.shared.get() else {
+            return;
+        };
+        let host = self.host.borrow();
+        let Some(host) = host.as_ref() else {
+            return;
+        };
+        // The host's container, where the page and its glow sit side by side.
+        let Some(container) = (unsafe { host.0.superview() }) else {
+            return;
+        };
+        let mut glow = self.glow.borrow_mut();
+        let glow = glow.get_or_insert_with(|| {
+            let mtm = objc2::MainThreadMarker::new().expect("Pages live on the UI thread");
+            glow::Glow::new(mtm, accent, pulse)
+        });
+        if unsafe { glow.superview() }.as_ref() != Some(&container) {
+            glow.removeFromSuperview();
+            container.addSubview_positioned_relativeTo(
+                glow,
+                objc2_app_kit::NSWindowOrderingMode::Above,
+                Some(&host.0),
+            );
+        }
+        glow.place(host.0.frame(), f64::from(crate::ui::CARD_RADIUS));
+        if glow.isHidden() != host.0.isHidden() {
+            glow.setHidden(host.0.isHidden());
+        }
+    }
+
     pub fn contains(&self, point: Point<Pixels>) -> bool {
         self.visible.get() && self.bounds.get().contains(&point)
     }
@@ -1190,6 +1256,10 @@ impl Page {
             #[cfg(target_os = "macos")]
             if let Some(host) = self.host.borrow().as_ref() {
                 host.0.setHidden(true);
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(glow) = self.glow.borrow().as_ref() {
+                glow.setHidden(true);
             }
         }
     }
@@ -1616,6 +1686,7 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
                 host.0.setHidden(!page.visible.get());
             }
         }
+        page.update_glow();
     }
     Ok(())
 }
@@ -1694,6 +1765,8 @@ mod extensions;
 mod fade;
 #[cfg(target_os = "macos")]
 mod find;
+#[cfg(target_os = "macos")]
+mod glow;
 #[cfg(target_os = "macos")]
 mod media;
 #[cfg(target_os = "macos")]
