@@ -102,7 +102,15 @@ mod tests {
         let original = Session::fresh([7; 16]);
         store.save(&original).unwrap();
         drop(store);
-        let mut reopened = Store::open(dir.path().into()).unwrap();
+        // Tests that run tools (`ditto`) fork in parallel, and a child holds
+        // copies of open files until it execs; the lock frees moments later.
+        let mut reopened = (0..50)
+            .find_map(|_| {
+                Store::open(dir.path().into())
+                    .inspect_err(|_| std::thread::sleep(std::time::Duration::from_millis(20)))
+                    .ok()
+            })
+            .unwrap();
         assert_eq!(reopened.load([9; 16]).unwrap(), original);
     }
     #[test]
