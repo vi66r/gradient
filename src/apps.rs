@@ -47,6 +47,8 @@ pub(crate) struct AppPage {
     pub frame: Option<[f32; 4]>,
     /// Gliding back onto the card, about to become a tab again.
     pub returning: bool,
+    /// What its window was last sent.
+    look: Option<AppLook>,
 }
 
 /// The app window's view: the strip, and the page placed below it.
@@ -57,6 +59,36 @@ pub(crate) struct AppWindow {
     focus: FocusHandle,
     /// The strip's controls are showing.
     open: bool,
+    /// What it shows, sent by the browser (`sync_apps`).
+    look: Option<AppLook>,
+}
+
+/// What an app window draws, sent by the browser whenever it changes. The
+/// window never reads the browser while drawing: GPUI ties an entity to the
+/// last window that drew from it, and the browser's own tasks then ran in
+/// the app window (a page returning from one went back into it and was lost
+/// with it).
+#[derive(Clone)]
+pub(crate) struct AppLook {
+    title: String,
+    tint: Option<u32>,
+    dark: bool,
+    /// Placed only once it has moved into this window.
+    page: Option<Rc<engine::Page>>,
+    error: Option<String>,
+}
+
+impl PartialEq for AppLook {
+    fn eq(&self, other: &Self) -> bool {
+        self.title == other.title
+            && self.tint == other.tint
+            && self.dark == other.dark
+            && self.error == other.error
+            && match (&self.page, &other.page) {
+                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                (a, b) => a.is_none() && b.is_none(),
+            }
+    }
 }
 
 impl Browser {
@@ -131,6 +163,7 @@ impl Browser {
             window: None,
             frame,
             returning: false,
+            look: None,
         });
         let browser = cx.entity();
         let main = window.window_handle();
@@ -405,6 +438,39 @@ impl Browser {
             .spawn(async move { answer.await.ok() })
     }
 
+    /// Called on every render: sends each app window what it shows, when
+    /// that changed.
+    pub(crate) fn sync_apps(&mut self, cx: &mut Context<Self>) {
+        let dark = self.dark;
+        for app in &mut self.apps {
+            let Some(handle) = app.window else {
+                continue;
+            };
+            let tab = &app.tab;
+            let look = AppLook {
+                title: if tab.saved.title.trim().is_empty() {
+                    model::display_host(&tab.saved.url)
+                } else {
+                    tab.saved.title.clone()
+                },
+                tint: tab.tint,
+                dark,
+                page: tab.page.clone(),
+                error: tab.error.clone(),
+            };
+            if app.look.as_ref() == Some(&look) {
+                continue;
+            }
+            app.look = Some(look.clone());
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |view, _, cx| {
+                    view.look = Some(look);
+                    cx.notify();
+                });
+            });
+        }
+    }
+
     pub(crate) fn app_page(&self, id: u64) -> Option<Rc<engine::Page>> {
         self.app(id).and_then(|app| app.tab.page.clone())
     }
@@ -470,7 +536,6 @@ impl AppWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        cx.observe(browser, |_, _, cx| cx.notify()).detach();
         let weak = browser.downgrade();
         cx.observe_window_bounds(window, move |this, window, cx| {
             let bounds = window.bounds();
@@ -502,6 +567,7 @@ impl AppWindow {
             id,
             focus,
             open: false,
+            look: None,
         }
     }
 
@@ -521,15 +587,10 @@ impl AppWindow {
 impl Render for AppWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let id = self.id;
-        let Some(browser) = self.browser.upgrade() else {
+        let Some(look) = self.look.clone() else {
             return div().into_any_element();
         };
-        let browser = browser.read(cx);
-        let Some(app) = browser.app(id) else {
-            return div().into_any_element();
-        };
-        let dark = browser.dark;
-        let ground = ui::page_color(app.tab.tint, dark);
+        let ground = ui::page_color(look.tint, look.dark);
         let light_ground = ui::luminance(ground) > 0.4;
         let ink = if light_ground { 0x1d1d1f } else { 0xf5f5f7 };
         let wash = if light_ground {
@@ -537,15 +598,8 @@ impl Render for AppWindow {
         } else {
             0xffff_ff1f
         };
-        let title = if app.tab.saved.title.trim().is_empty() {
-            model::display_host(&app.tab.saved.url)
-        } else {
-            app.tab.saved.title.clone()
-        };
-        window.set_window_title(&title);
-        // Placed only once it has moved into this window.
-        let page = app.tab.page.clone().filter(|_| app.window.is_some());
-        let error = app.tab.error.clone();
+        window.set_window_title(&look.title);
+        let (page, error) = (look.page, look.error);
         let button = |name: &'static str, icon: Icon| {
             div()
                 .id(name)

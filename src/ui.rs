@@ -1244,6 +1244,7 @@ impl Render for Browser {
         // them here; unchanged tabs cost a comparison.
         self.sync_extension_tabs();
         self.sync_menus(cx);
+        self.sync_apps(cx);
         let p = palette(self.dark);
         // A card open to agents glows: accent when shared, amber when its
         // site is trusted (see `engine::Page::set_shared`). Trusted pages
