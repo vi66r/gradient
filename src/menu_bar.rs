@@ -11,7 +11,7 @@ use crate::{
     FindNext, FindPrevious, FocusAddress, Forward, Inspect, NewPrivateTab, NewSpace, NewTab,
     NextSpace, NextTab, OpenFile, PopIn, PopOut, PreviousSpace, PreviousTab, Print, Quit, Reload,
     RenameSpace, ReopenTab, RequestLab, ShowHistory, ShowSettings, SitePermissions, TabCommand,
-    TabMenu, ToggleAgent, ZoomIn, ZoomOut, model, spaces,
+    TabMenu, ToggleAgent, ToggleSidebar, ZoomIn, ZoomOut, model, spaces,
 };
 use gpui::component::input;
 use gpui::{Action, Context, Menu, MenuItem, OsAction, SystemMenuType, Window, actions};
@@ -40,6 +40,7 @@ pub(crate) struct MenuState {
     elsewhere: Vec<([u8; 16], String)>,
     spaces: Vec<String>,
     space: usize,
+    compact: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -92,6 +93,7 @@ impl Browser {
             elsewhere,
             spaces: self.spaces.iter().map(|space| space.name.clone()).collect(),
             space: self.space,
+            compact: self.settings.compact_sidebar,
         }
     }
 
@@ -223,6 +225,15 @@ pub(crate) fn menus(state: &MenuState) -> Vec<Menu> {
             ])),
         ]),
         Menu::new("View").items([
+            MenuItem::action(
+                if state.compact {
+                    "Expand Sidebar"
+                } else {
+                    "Collapse Sidebar"
+                },
+                ToggleSidebar,
+            ),
+            MenuItem::separator(),
             MenuItem::action("Reload Page", Reload),
             MenuItem::separator(),
             MenuItem::action("Actual Size", ActualSize),
@@ -269,6 +280,7 @@ mod tests {
             elsewhere: Vec::new(),
             spaces: vec!["Personal".into(), "Work".into()],
             space: 1,
+            compact: false,
         }
     }
 

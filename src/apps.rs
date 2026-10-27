@@ -25,9 +25,9 @@ fn card_frame(window: &Window) -> [f32; 4] {
     let main = window.bounds();
     let top = ui::CONTROL_ZONE - STRIP;
     [
-        f32::from(main.origin.x) + ui::SIDEBAR,
+        f32::from(main.origin.x) + ui::sidebar_width(),
         f32::from(main.origin.y) + top,
-        f32::from(main.size.width) - ui::SIDEBAR,
+        f32::from(main.size.width) - ui::sidebar_width(),
         f32::from(main.size.height) - top,
     ]
 }
@@ -49,6 +49,16 @@ pub(crate) struct AppPage {
     pub returning: bool,
     /// What its window was last sent.
     look: Option<AppLook>,
+    /// Its place in the tab list before it popped out.
+    slot: Option<Slot>,
+}
+
+/// A tab's place in its Space's list: below the tab that was above it, or
+/// failing that at its old index.
+#[derive(Clone, Copy)]
+struct Slot {
+    above: Option<u64>,
+    index: usize,
 }
 
 /// The app window's view: the strip, and the page placed below it.
@@ -130,6 +140,11 @@ impl Browser {
         } else {
             (card, Some(away))
         };
+        // Where it came from, so returning puts it back there.
+        let slot = Slot {
+            above: index.checked_sub(1).map(|above| self.tabs[above].id),
+            index,
+        };
         let tab = self.tabs.remove(index);
         if self.tabs.is_empty() {
             self.new_tab(START.into(), false, window, cx);
@@ -140,6 +155,9 @@ impl Browser {
         }
         let space = self.current_space().id;
         self.open_app_window(tab, space, Some(frame), glide, window, cx);
+        if let Some(app) = self.apps.last_mut() {
+            app.slot = Some(slot);
+        }
         self.save();
         cx.notify();
     }
@@ -164,6 +182,7 @@ impl Browser {
             frame,
             returning: false,
             look: None,
+            slot: None,
         });
         let browser = cx.entity();
         let main = window.window_handle();
@@ -196,7 +215,7 @@ impl Browser {
                         // The page goes back to the browser window.
                         if let Some(index) = this.apps.iter().position(|app| app.tab.id == id) {
                             let app = this.apps.remove(index);
-                            this.restore_tab(app.tab, app.space, window, cx);
+                            this.restore_tab(app.tab, app.space, None, window, cx);
                         }
                         cx.notify();
                     }
@@ -273,6 +292,7 @@ impl Browser {
         &mut self,
         tab: Tab,
         space: [u8; 16],
+        slot: Option<Slot>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -283,11 +303,20 @@ impl Browser {
         {
             self.switch_space(index, window, cx);
         }
-        self.tabs.insert(0, tab);
-        if let Some(page) = &self.tabs[0].page {
+        let position = slot.map_or(0, |slot| match slot.above {
+            Some(above) => self
+                .tabs
+                .iter()
+                .position(|tab| tab.id == above)
+                .map_or(slot.index, |above| above + 1),
+            None => 0,
+        });
+        let position = position.min(self.tabs.len());
+        self.tabs.insert(position, tab);
+        if let Some(page) = &self.tabs[position].page {
             page.adopt(window, true);
         }
-        self.activate(0, window, cx);
+        self.activate(position, window, cx);
     }
 
     /// The strip's return button, or Tab ▸ Move to Browser Window: the
@@ -327,7 +356,7 @@ impl Browser {
             return;
         };
         let app = self.apps.remove(index);
-        self.restore_tab(app.tab, app.space, window, cx);
+        self.restore_tab(app.tab, app.space, app.slot, window, cx);
         remove_window(app.window, cx);
         window.activate_window();
         self.save();

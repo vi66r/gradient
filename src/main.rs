@@ -72,6 +72,7 @@ actions!(
         ClearHistory,
         PopOut,
         PopIn,
+        ToggleSidebar,
         Quit
     ]
 );
@@ -2596,6 +2597,7 @@ fn main() -> anyhow::Result<()> {
             KeyBinding::new(&format!("{modifier}-0"), ActualSize, None),
             KeyBinding::new(&format!("{modifier}-p"), Print, None),
             KeyBinding::new(&format!("{modifier}-q"), Quit, None),
+            KeyBinding::new(&format!("{modifier}-shift-l"), ToggleSidebar, None),
             KeyBinding::new(&format!("{modifier}-z"), menu_bar::EditUndo, None),
             KeyBinding::new(&format!("{modifier}-shift-z"), menu_bar::EditRedo, None),
             KeyBinding::new(&format!("{modifier}-m"), menu_bar::Minimize, None),

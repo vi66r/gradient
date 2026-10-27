@@ -58,6 +58,20 @@ pub(crate) fn palette(dark: bool) -> Palette {
 }
 
 pub(crate) const SIDEBAR: f32 = 248.;
+/// The compact sidebar: square cells, room for the traffic lights.
+const COMPACT: f32 = 76.;
+/// A tab's square cell in the compact sidebar.
+const SQUARE: f32 = 44.;
+
+thread_local! {
+    /// The sidebar's width as last drawn, while it glides between sizes too.
+    static SIDEBAR_WIDTH: std::cell::Cell<f32> = const { std::cell::Cell::new(SIDEBAR) };
+}
+
+/// The sidebar's width on screen now.
+pub(crate) fn sidebar_width() -> f32 {
+    SIDEBAR_WIDTH.with(|width| width.get())
+}
 /// Matches the native page host's corner radius in engine.rs.
 /// The page card sits below the toolbar and runs flush to the window's right
 /// and bottom edges. Its top corners and its sidebar-facing bottom corner are
@@ -85,7 +99,32 @@ fn hsla(color: u32) -> Hsla {
 }
 
 impl Browser {
+    /// The sidebar: full, or compact (square icons). It glides between the
+    /// two widths.
     fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let compact = self.settings.compact_sidebar;
+        let width = motion::transition(
+            "sidebar-width",
+            if compact { COMPACT } else { SIDEBAR },
+            Transition::new(NORMAL),
+            window,
+            cx,
+        );
+        SIDEBAR_WIDTH.with(|now| now.set(width));
+        div()
+            .w(px(width))
+            .h_full()
+            .flex_shrink_0()
+            .overflow_hidden()
+            .child(if compact {
+                self.compact_sidebar(window, cx)
+            } else {
+                self.full_sidebar(window, cx)
+            })
+            .into_any_element()
+    }
+
+    fn full_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(self.dark);
         let access = self.agent_access(&self.tabs[self.active]);
         let grant = access.is_some();
@@ -97,13 +136,27 @@ impl Browser {
             .w(px(SIDEBAR))
             .flex_shrink_0()
             .h_full()
-            // The traffic lights' row.
+            // The traffic lights' row, with the toggle at the tab cells'
+            // right edge.
             .child(
                 div()
                     .id("sidebar-titlebar")
                     .h(px(CONTROL_ZONE))
                     .flex_shrink_0()
-                    .on_mouse_down(MouseButton::Left, move_window),
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .on_mouse_down(MouseButton::Left, move_window)
+                    .child(
+                        icon_button(
+                            "sidebar-toggle",
+                            "Collapse Sidebar",
+                            IconName::PanelLeftClose,
+                            p,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
+                    ),
             )
             .child(
                 div()
@@ -639,52 +692,8 @@ impl Browser {
             window,
             cx,
         );
-        // Start tabs saved before "New Tab" was title-cased say "New tab".
-        let title: SharedString = if tab.saved.url == START {
-            "New Tab".into()
-        } else if tab.saved.title.is_empty() {
-            model::display_host(&tab.saved.url).into()
-        } else {
-            tab.saved.title.clone().into()
-        };
-        let site_icon = (!tab.private)
-            .then(|| favicon::host_key(&tab.saved.url))
-            .flatten()
-            .and_then(|key| self.icons.get(&key))
-            .map(|(image, _)| image.clone());
-        let resting = tab.page.is_none() && tab.saved.url != START;
-        let icon = if tab.loading {
-            Icon::new(IconName::LoaderCircle)
-                .size_4()
-                .text_color(rgb(p.muted))
-                .with_animation(
-                    "spin",
-                    Animation::new(Duration::from_millis(900)).repeat(),
-                    |icon, delta| icon.transform(Transformation::rotate(percentage(delta))),
-                )
-                .into_any_element()
-        } else if let Some(image) = site_icon {
-            img(image)
-                .size(px(16.))
-                .flex_shrink_0()
-                .rounded(px(4.))
-                // Resting tabs keep their identity but read as asleep.
-                .when(resting, |icon| icon.opacity(0.5))
-                .into_any_element()
-        } else {
-            Icon::new(if tab.private {
-                IconName::Lock
-            } else if tab.page.is_none() && tab.saved.url != START {
-                IconName::Moon
-            } else if model::is_file_url(&tab.saved.url) {
-                IconName::FileText
-            } else {
-                IconName::Globe
-            })
-            .size_4()
-            .text_color(rgb(if selected { p.ink } else { p.muted }))
-            .into_any_element()
-        };
+        let title = tab_title(tab);
+        let icon = self.tab_icon(tab, selected, p);
         let group: SharedString = format!("tab-{}", tab.id).into();
         let id = tab.id;
         let media = tab.media.as_ref().filter(|_| tab.page.is_some());
@@ -880,15 +889,7 @@ impl Browser {
                         this.close(index, w, cx);
                     })),
             );
-        // Lifted out while it's dragged: its place in the list stays, faint.
-        let lifted = self.dragging == Some(tab.id) && cx.has_active_drag();
-        let preview = DraggedTab {
-            id: tab.id,
-            title: title.clone(),
-            ink: p.ink,
-            ground: p.selected,
-        };
-        div()
+        let row = div()
             .id(("tab", tab.id))
             .group(group.clone())
             .role(Role::Tab)
@@ -904,31 +905,8 @@ impl Browser {
             .when(!selected, |d| d.hover(|s| s.bg(rgb(p.hover))))
             .child(header)
             .children(strip)
-            .when(lifted, |row| row.opacity(0.35))
-            .on_click(cx.listener(move |this, _, w, cx| this.activate(index, w, cx)))
-            .on_drag(preview, |tab, offset, _, cx| {
-                cx.new(|_| TabPreview {
-                    tab: tab.clone(),
-                    offset,
-                })
-            })
-            // The list rearranges as the dragged tab passes over this one.
-            .on_drag_move(
-                cx.listener(move |this, event: &DragMoveEvent<DraggedTab>, _, cx| {
-                    let position = event.event.position;
-                    if !event.bounds.contains(&position) {
-                        return;
-                    }
-                    let dragged = event.drag(cx).id;
-                    this.dragging = Some(dragged);
-                    this.drag_tab_over(dragged, id, position.y >= event.bounds.center().y, cx);
-                }),
-            )
-            .on_drop(cx.listener(|this, _: &DraggedTab, _, cx| {
-                this.dragging = None;
-                this.save();
-                cx.notify();
-            }))
+            .on_click(cx.listener(move |this, _, w, cx| this.activate(index, w, cx)));
+        self.reorderable(row, tab.id, title.clone(), p, cx)
             // Acts on this tab without switching to it, as in Safari.
             .on_mouse_down(
                 MouseButton::Right,
@@ -1436,6 +1414,7 @@ impl Render for Browser {
             }))
             .on_action(cx.listener(|this, _: &ClearHistory, w, cx| this.clear_history(w, cx)))
             .on_action(cx.listener(|this, _: &PopOut, w, cx| this.pop_out(this.active, w, cx)))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|_, _: &menu_bar::About, _, _| crate::engine::show_about()))
             .on_action(cx.listener(|_, _: &menu_bar::Hide, _, cx| cx.hide()))
             .on_action(cx.listener(|_, _: &menu_bar::HideOthers, _, cx| cx.hide_other_apps()))
@@ -1588,6 +1567,19 @@ impl Browser {
             .items_center()
             .gap_0p5()
             .text_color(rgb(ink))
+            // The compact sidebar's traffic lights leave it no room for its
+            // toggle, so it leads the toolbar.
+            .when(self.settings.compact_sidebar, |bar| {
+                bar.child(
+                    toolbar_button(
+                        "sidebar-expand",
+                        "Expand Sidebar",
+                        IconName::PanelLeftOpen,
+                        wash,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
+                )
+            })
             .child(
                 toolbar_button("back", "Back", IconName::ChevronLeft, wash)
                     .on_click(cx.listener(|this, _, _, _| this.history(false))),
@@ -2610,7 +2602,435 @@ impl Render for TabPreview {
     }
 }
 
+/// A square control in the compact sidebar. No tooltip: from a column this
+/// narrow, one would open under the page.
+fn square_button(id: &'static str, label: &str, icon: IconName, p: Palette) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(label.to_string())
+        .size(px(36.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(R_CONTROL))
+        .cursor_pointer()
+        .text_color(rgb(p.muted))
+        .hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(Icon::new(icon).size_4())
+}
+
+/// A small round button on a corner of a compact tab's square.
+fn badge(id: (&'static str, u64), label: &str, icon: IconName, p: Palette) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(label.to_string())
+        .absolute()
+        .size(px(16.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .cursor_pointer()
+        .bg(rgb(p.card))
+        .border_1()
+        .border_color(rgb(p.line))
+        .text_color(rgb(p.muted))
+        .hover(|s| s.text_color(rgb(p.ink)))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(Icon::new(icon).size(px(10.)))
+}
+
+/// A tab's name in the sidebar.
+fn tab_title(tab: &Tab) -> SharedString {
+    // Start tabs saved before "New Tab" was title-cased say "New tab".
+    if tab.saved.url == START {
+        "New Tab".into()
+    } else if tab.saved.title.is_empty() {
+        model::display_host(&tab.saved.url).into()
+    } else {
+        tab.saved.title.clone().into()
+    }
+}
+
 impl Browser {
+    pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.settings.compact_sidebar = !self.settings.compact_sidebar;
+        if let Err(error) = self.settings.save(self.store.dir()) {
+            self.notice = Some(format!("Setting not saved: {error}"));
+        }
+        cx.notify();
+    }
+
+    /// The compact sidebar: each tab a square with its icon, a corner badge
+    /// to mute one that plays, and one to close on hover; then the Spaces as
+    /// dots and the footer's tools, stacked.
+    fn compact_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let p = palette(self.dark);
+        let access = self.agent_access(&self.tabs[self.active]);
+        let agent_ink = agent_color(p, self.dark, access.as_ref().is_some_and(|a| a.trusted()));
+        let lab = self.tool == Some(Tool::Lab);
+        let lit = move |button: Stateful<Div>, on: bool| {
+            button.when(on, |d| {
+                d.bg(rgb(p.selected)).text_color(rgb(p.ink)).shadow_xs()
+            })
+        };
+        let wash = if self.dark { 0xffffff14 } else { 0x0f172a0f };
+        let squares: Vec<_> = (0..self.tabs.len())
+            .map(|index| self.tab_square(index, p, window, cx))
+            .collect();
+        let spaces = self.spaces.iter().enumerate().map(|(index, space)| {
+            let current = index == self.space;
+            let id = space.id;
+            let color = space_color(space, self.dark);
+            let mark = if space.private {
+                Icon::new(IconName::Lock)
+                    .size_3()
+                    .text_color(rgb(color))
+                    .into_any_element()
+            } else {
+                div()
+                    .size(px(8.))
+                    .rounded_full()
+                    .bg(rgb(color))
+                    .into_any_element()
+            };
+            div()
+                .id(("compact-space", index))
+                .role(Role::Tab)
+                .aria_label(space.name.clone())
+                .aria_selected(current)
+                .size(px(28.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .cursor_pointer()
+                .when(current, |chip| chip.bg(rgba(wash)))
+                .when(!current, |chip| chip.hover(move |s| s.bg(rgba(wash))))
+                .child(mark)
+                .when(!current && !space.private, |chip| {
+                    chip.drag_over::<DraggedTab>(move |style, _, _, _| style.bg(rgba(wash)))
+                        .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                            this.dragging = None;
+                            this.request_discard(
+                                lifecycle::Discard::MoveTab {
+                                    id: dragged.id,
+                                    space: id,
+                                },
+                                window,
+                                cx,
+                            );
+                        }))
+                })
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.space_menu(id, event.position, window, cx);
+                    }),
+                )
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.switch_space(index, window, cx)),
+                )
+        });
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .w(px(COMPACT))
+            .flex_shrink_0()
+            .h_full()
+            .child(
+                div()
+                    .id("sidebar-titlebar")
+                    .h(px(CONTROL_ZONE))
+                    .w_full()
+                    .flex_shrink_0()
+                    .on_mouse_down(MouseButton::Left, move_window),
+            )
+            .child(
+                div()
+                    .id("tab-list")
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        square_button("new-tab", "Open New Tab", IconName::Plus, p)
+                            .size(px(SQUARE))
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                this.new_tab(START.into(), false, w, cx)
+                            })),
+                    )
+                    .children(squares)
+                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                        this.space_swipe(event, window, cx)
+                    })),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .py_2()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_1()
+                    .children(spaces)
+                    .child(
+                        square_button("new-space", "New Space", IconName::Plus, p)
+                            .size(px(28.))
+                            .rounded_full()
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.new_space(window, cx)),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .mx_2()
+                    .mb_2()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(rgba(if self.dark { 0xffffff14 } else { 0x0f172a14 }))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_1()
+                    // Downloads need the full sidebar; this opens it.
+                    .when(
+                        self.downloads.iter().any(|download| download.active()),
+                        |footer| {
+                            footer.child(
+                                square_button("downloads", "Downloads", IconName::Download, p)
+                                    .text_color(rgb(p.accent))
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)),
+                                    ),
+                            )
+                        },
+                    )
+                    .child(lit(
+                        square_button("request-lab", "Request lab", IconName::Terminal, p)
+                            .aria_selected(lab)
+                            .on_click(
+                                cx.listener(|this, _, w, cx| this.show_tool(Tool::Lab, w, cx)),
+                            ),
+                        lab,
+                    ))
+                    .child(lit(
+                        square_button("show-history", "History", IconName::Clock, p).on_click(
+                            cx.listener(|this, _, w, cx| this.show_tool(Tool::History, w, cx)),
+                        ),
+                        self.tool == Some(Tool::History),
+                    ))
+                    .child(lit(
+                        square_button("show-settings", "Settings", IconName::Settings, p).on_click(
+                            cx.listener(|this, _, w, cx| this.show_tool(Tool::Settings, w, cx)),
+                        ),
+                        self.tool == Some(Tool::Settings),
+                    ))
+                    .child(
+                        square_button(
+                            "agent-access",
+                            "Share this tab with agents",
+                            IconName::Bot,
+                            p,
+                        )
+                        .when(access.is_some(), |d| {
+                            d.bg(rgba((agent_ink << 8) | 0x24))
+                                .text_color(rgb(agent_ink))
+                        })
+                        .on_click(cx.listener(|this, _, w, cx| this.toggle_agent(w, cx))),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// A tab in the compact sidebar: its icon in a square.
+    fn tab_square(
+        &self,
+        index: usize,
+        p: Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let tab = &self.tabs[index];
+        let id = tab.id;
+        let selected = index == self.active && self.tool.is_none();
+        let background = motion::transition(
+            format!("tab-bg-{id}"),
+            hsla(if selected { p.selected } else { p.chrome }),
+            Transition::new(NORMAL),
+            window,
+            cx,
+        );
+        let title = tab_title(tab);
+        let group: SharedString = format!("tab-square-{id}").into();
+        let media = tab
+            .media
+            .as_ref()
+            .filter(|media| tab.page.is_some() && media.shown);
+        let square = div()
+            .id(("tab-square", id))
+            .group(group.clone())
+            .role(Role::Tab)
+            .aria_selected(selected)
+            .aria_label(title.clone())
+            .relative()
+            .size(px(SQUARE))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(R_CONTROL))
+            .cursor_pointer()
+            .bg(background)
+            .when(selected, |d| d.shadow_xs())
+            .when(!selected, |d| d.hover(|s| s.bg(rgb(p.hover))))
+            .child(self.tab_icon(tab, selected, p))
+            // The one media control here: mute, on a playing tab.
+            .when_some(media, |square, media| {
+                square.child(
+                    badge(
+                        ("mute-square", id),
+                        if media.muted {
+                            "Unmute tab"
+                        } else {
+                            "Mute tab"
+                        },
+                        if media.muted {
+                            IconName::VolumeX
+                        } else {
+                            IconName::Volume2
+                        },
+                        p,
+                    )
+                    .bottom(px(-2.))
+                    .right(px(-2.))
+                    .when(media.muted, |d| d.text_color(rgb(p.accent)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.toggle_media_muted(id, cx);
+                    })),
+                )
+            })
+            .child(
+                badge(("close-square", id), "Close tab", IconName::X, p)
+                    .top(px(-2.))
+                    .right(px(-2.))
+                    .opacity(0.)
+                    .group_hover(group, |s| s.opacity(1.))
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        cx.stop_propagation();
+                        this.close(index, w, cx);
+                    })),
+            )
+            .on_click(cx.listener(move |this, _, w, cx| this.activate(index, w, cx)));
+        self.reorderable(square, id, title, p, cx).on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                this.tab_menu(id, event.position, window, cx);
+            }),
+        )
+    }
+
+    /// A tab's icon: a spinner while loading, else its site's icon, else a
+    /// symbol for what it is.
+    fn tab_icon(&self, tab: &Tab, selected: bool, p: Palette) -> AnyElement {
+        let site_icon = (!tab.private)
+            .then(|| favicon::host_key(&tab.saved.url))
+            .flatten()
+            .and_then(|key| self.icons.get(&key))
+            .map(|(image, _)| image.clone());
+        let resting = tab.page.is_none() && tab.saved.url != START;
+        if tab.loading {
+            Icon::new(IconName::LoaderCircle)
+                .size_4()
+                .text_color(rgb(p.muted))
+                .with_animation(
+                    "spin",
+                    Animation::new(Duration::from_millis(900)).repeat(),
+                    |icon, delta| icon.transform(Transformation::rotate(percentage(delta))),
+                )
+                .into_any_element()
+        } else if let Some(image) = site_icon {
+            img(image)
+                .size(px(16.))
+                .flex_shrink_0()
+                .rounded(px(4.))
+                // Resting tabs keep their identity but read as asleep.
+                .when(resting, |icon| icon.opacity(0.5))
+                .into_any_element()
+        } else {
+            Icon::new(if tab.private {
+                IconName::Lock
+            } else if resting {
+                IconName::Moon
+            } else if model::is_file_url(&tab.saved.url) {
+                IconName::FileText
+            } else {
+                IconName::Globe
+            })
+            .size_4()
+            .text_color(rgb(if selected { p.ink } else { p.muted }))
+            .into_any_element()
+        }
+    }
+
+    /// Lets a tab's cell (a row, or a square in the compact sidebar) be
+    /// dragged to a new place: the list rearranges as it passes, and the
+    /// tab's own place stays, faint.
+    fn reorderable(
+        &self,
+        cell: Stateful<Div>,
+        id: u64,
+        title: SharedString,
+        p: Palette,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let lifted = self.dragging == Some(id) && cx.has_active_drag();
+        let preview = DraggedTab {
+            id,
+            title,
+            ink: p.ink,
+            ground: p.selected,
+        };
+        cell.when(lifted, |cell| cell.opacity(0.35))
+            .on_drag(preview, |tab, offset, _, cx| {
+                cx.new(|_| TabPreview {
+                    tab: tab.clone(),
+                    offset,
+                })
+            })
+            .on_drag_move(
+                cx.listener(move |this, event: &DragMoveEvent<DraggedTab>, _, cx| {
+                    let position = event.event.position;
+                    if !event.bounds.contains(&position) {
+                        return;
+                    }
+                    let dragged = event.drag(cx).id;
+                    this.dragging = Some(dragged);
+                    this.drag_tab_over(dragged, id, position.y >= event.bounds.center().y, cx);
+                }),
+            )
+            .on_drop(cx.listener(|this, _: &DraggedTab, _, cx| {
+                this.dragging = None;
+                this.save();
+                cx.notify();
+            }))
+    }
+
     /// The dragged tab takes `over`'s place once the pointer crosses that
     /// tab's middle, so a small move doesn't make the two bounce.
     fn drag_tab_over(&mut self, dragged: u64, over: u64, lower_half: bool, cx: &mut Context<Self>) {
@@ -2670,7 +3090,8 @@ impl Render for Placed {
             f32::from(self.viewport.height),
         );
         let tip = div().absolute().whitespace_nowrap().child(self.tip.clone());
-        let tip = if x >= SIDEBAR && y < CONTROL_ZONE {
+        let sidebar = sidebar_width();
+        let tip = if x >= sidebar && y < CONTROL_ZONE {
             // The toolbar: beside the pointer, past the button it's on.
             let middle = CONTROL_ZONE / 2. - y;
             let tip = tip.top(px(middle - 30.)).h(px(60.)).flex().items_center();
@@ -2680,8 +3101,8 @@ impl Render for Placed {
                 tip.left(px(14.))
             }
         } else {
-            let leftward = if x < SIDEBAR {
-                x > SIDEBAR / 2.
+            let leftward = if x < sidebar {
+                x > sidebar / 2.
             } else {
                 x > width - 240.
             };
@@ -2692,7 +3113,7 @@ impl Render for Placed {
             };
             // The sidebar's Spaces row and footer: opening below would
             // cover the buttons beneath.
-            let bottom = if x < SIDEBAR { 120. } else { 56. };
+            let bottom = if x < sidebar { 120. } else { 56. };
             if y > height - bottom {
                 tip.bottom_0()
             } else {

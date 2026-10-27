@@ -20,6 +20,9 @@ pub struct Settings {
     /// field (never in the Private Space). On unless turned off (Rafi).
     #[serde(default = "on")]
     pub suggest_searches: bool,
+    /// The sidebar shows tabs as square icons only.
+    #[serde(default)]
+    pub compact_sidebar: bool,
 }
 
 impl Default for Settings {
@@ -27,6 +30,7 @@ impl Default for Settings {
         Self {
             search: SearchEngine::default(),
             suggest_searches: true,
+            compact_sidebar: false,
         }
     }
 }
@@ -74,6 +78,7 @@ mod tests {
         let settings = Settings {
             search: SearchEngine::Kagi,
             suggest_searches: false,
+            compact_sidebar: true,
         };
         settings.save(dir.path()).unwrap();
         assert_eq!(Settings::load(dir.path()), settings);
@@ -83,6 +88,7 @@ mod tests {
             Settings::load(dir.path()).suggest_searches,
             "older files say nothing"
         );
+        assert!(!Settings::load(dir.path()).compact_sidebar);
         fs::write(path(dir.path()), b"not json").unwrap();
         assert_eq!(Settings::load(dir.path()), Settings::default());
     }
