@@ -1768,10 +1768,18 @@ fn content_container(
     let fill =
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable;
     let container = NSView::initWithFrame(NSView::alloc(mtm), content.frame());
+    // Replacing the content view leaves the window itself as first
+    // responder, where typed letters go nowhere; GPUI's view takes it back.
+    let typing = window
+        .firstResponder()
+        .is_none_or(|responder| *responder == **content || *responder == **window);
     window.setContentView(Some(&container));
     content.setFrame(container.bounds());
     content.setAutoresizingMask(fill);
     container.addSubview(&content);
+    if typing {
+        window.makeFirstResponder(Some(&content));
+    }
     // Finder/Mail's sidebar material: the desktop shows through, frosted,
     // adapting to light and dark. GPUI draws transparently over it.
     let backdrop =
@@ -2100,4 +2108,19 @@ pub fn native_window_menu() {
             }
         }
     }
+}
+
+
+/// Gives GPUI's view the keyboard, for the shell's own text fields. Fields in
+/// the titlebar row (the address field) never get it from a click: AppKit
+/// only moves the keyboard to views that take clicks, and the titlebar does.
+pub fn focus_shell(window: &Window) {
+    #[cfg(target_os = "macos")]
+    if let (Some(native), Ok(Parent(view))) = (native_window(window), Parent::of(window))
+        && native.firstResponder().as_deref() != Some(&**view)
+    {
+        native.makeFirstResponder(Some(&view));
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
 }

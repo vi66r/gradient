@@ -1335,6 +1335,7 @@ impl Browser {
         if let Some(page) = &self.tabs[self.active].page {
             let _ = page.raw.focus_parent();
         }
+        engine::focus_shell(window);
         if self.address_focused(window, cx) {
             // Already editing, so no focus event: select here.
             self.address
