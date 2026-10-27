@@ -337,7 +337,7 @@ pub fn display_host(value: &str) -> String {
             url.host_str()
                 .map(|host| host.trim_start_matches("www.").to_string())
         })
-        .unwrap_or_else(|| "New tab".into())
+        .unwrap_or_else(|| "New Tab".into())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -406,7 +406,7 @@ impl Session {
                 profile,
                 vec![SavedTab {
                     url: START.into(),
-                    title: "New tab".into(),
+                    title: "New Tab".into(),
                 }],
                 0,
             )],

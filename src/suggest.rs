@@ -937,7 +937,7 @@ mod tests {
             },
             OpenTab {
                 id: 5,
-                title: "New tab",
+                title: "New Tab",
                 url: model::START,
             },
         ];

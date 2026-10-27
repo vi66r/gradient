@@ -312,7 +312,7 @@ impl crate::Browser {
         tab.grant = None;
         tab.saved = crate::model::SavedTab {
             url: crate::model::START.into(),
-            title: "New tab".into(),
+            title: "New Tab".into(),
         };
         self.dirty = true;
         if index == self.active {

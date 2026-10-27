@@ -673,7 +673,7 @@ impl Browser {
             if saved.is_empty() {
                 saved.push(SavedTab {
                     url: START.into(),
-                    title: "New tab".into(),
+                    title: "New Tab".into(),
                 });
             }
             if anchor == Some(space.id) {

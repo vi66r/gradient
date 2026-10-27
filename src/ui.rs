@@ -620,7 +620,10 @@ impl Browser {
             window,
             cx,
         );
-        let title: SharedString = if tab.saved.title.is_empty() {
+        // Start tabs saved before "New Tab" was title-cased say "New tab".
+        let title: SharedString = if tab.saved.url == START {
+            "New Tab".into()
+        } else if tab.saved.title.is_empty() {
             model::display_host(&tab.saved.url).into()
         } else {
             tab.saved.title.clone().into()
@@ -864,87 +867,53 @@ impl Browser {
             )
     }
 
-    fn start_page(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn start_page(&self, _: &mut Context<Self>) -> AnyElement {
         let p = palette(self.dark);
         let private = self.tabs[self.active].private;
+        let shortcuts = if cfg!(target_os = "macos") {
+            "⌘L  Address      ⌘T  New Tab      ⌘Y  History"
+        } else {
+            "Ctrl L  Address      Ctrl T  New Tab      Ctrl Y  History"
+        };
         div()
             .size_full()
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
-            .gap_3()
+            .gap_2()
             .pb(px(96.))
-            .child(
-                Icon::new(if private {
-                    IconName::Lock
-                } else {
-                    IconName::Compass
-                })
-                .size(px(30.))
-                .text_color(rgb(p.accent)),
-            )
-            .child(
-                div()
-                    .mt_2()
-                    .text_size(px(26.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(if private {
-                        "A little privacy."
-                    } else {
-                        "A little room to explore."
-                    }),
-            )
+            .when(private, |page| {
+                page.child(
+                    Icon::new(IconName::Lock)
+                        .size(px(24.))
+                        .text_color(rgb(p.muted)),
+                )
+                .child(
+                    div()
+                        .mt_1()
+                        .text_size(px(20.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("Private Tab"),
+                )
+            })
             .child(
                 div()
                     .text_size(px(13.))
                     .text_color(rgb(p.muted))
                     .child(if private {
-                        "This tab’s address and website data won’t be saved."
+                        "Its history and website data aren’t saved."
                     } else {
-                        "Type an address or a search into the sidebar."
+                        "Search or enter an address above."
                     }),
             )
             .child(
                 div()
-                    .mt_5()
-                    .flex()
-                    .gap_2()
-                    .child(
-                        pill_button("start-webkit", "WebKit", IconName::Globe, p).on_click(
-                            cx.listener(|this, _, w, cx| {
-                                this.navigate("https://webkit.org/".into(), w, cx)
-                            }),
-                        ),
-                    )
-                    .child(
-                        pill_button("start-3d", "WebGPU samples", IconName::Box, p).on_click(
-                            cx.listener(|this, _, w, cx| {
-                                this.navigate(
-                                    "https://webgpu.github.io/webgpu-samples/".into(),
-                                    w,
-                                    cx,
-                                )
-                            }),
-                        ),
-                    )
-                    .child(
-                        pill_button("start-request", "Make a request", IconName::Terminal, p)
-                            .on_click(
-                                cx.listener(|this, _, w, cx| this.show_tool(Tool::Lab, w, cx)),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .mt_4()
+                    .mt_3()
                     .text_size(px(11.))
                     .text_color(rgb(p.muted))
-                    .child(if cfg!(target_os = "macos") {
-                        "⌘L go somewhere   ·   ⌘T new tab   ·   ⌘⇧C copy address"
-                    } else {
-                        "Ctrl L go somewhere   ·   Ctrl T new tab   ·   Ctrl Shift C copy address"
-                    }),
+                    .opacity(0.8)
+                    .child(shortcuts),
             )
             .into_any_element()
     }
@@ -976,7 +945,7 @@ impl Browser {
                     .child(if tab.error.is_some() {
                         "This page couldn’t open."
                     } else {
-                        "This tab is resting."
+                        "This tab is suspended."
                     }),
             )
             .child(
@@ -986,7 +955,7 @@ impl Browser {
                     .text_size(px(13.))
                     .text_color(rgb(p.muted))
                     .child(tab.error.clone().unwrap_or_else(|| {
-                        "It’s using no memory. Resume it when you’re ready.".into()
+                        "It isn’t using memory. Resuming reloads the page.".into()
                     })),
             )
             .child(
@@ -994,9 +963,9 @@ impl Browser {
                     pill_button(
                         "resume-tab",
                         if tab.error.is_some() {
-                            "Try again"
+                            "Try Again"
                         } else {
-                            "Resume tab"
+                            "Resume Tab"
                         },
                         IconName::RotateCw,
                         p,

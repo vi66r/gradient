@@ -124,7 +124,7 @@ impl Tab {
             id,
             saved: SavedTab {
                 title: if url == START {
-                    "New tab".into()
+                    "New Tab".into()
                 } else {
                     model::display_host(&url)
                 },
@@ -1118,7 +1118,7 @@ impl Browser {
         }
         tab.saved.url = url.clone();
         tab.saved.title = if url == START {
-            "New tab".into()
+            "New Tab".into()
         } else {
             model::display_host(&url)
         };
