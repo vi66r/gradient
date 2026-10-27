@@ -11,7 +11,9 @@ scripts/bundle-macos.sh release
 open dist/Gradient.app
 ```
 
-The repository pins Rust 1.96 and dependency versions through `Cargo.lock`. Use `scripts/bundle-macos.sh` for a faster debug build. The bundle is locally ad-hoc signed, not notarized or installed as your default browser.
+The repository pins Rust 1.96 and dependency versions through `Cargo.lock`. Use `scripts/bundle-macos.sh` for a faster debug build, or `scripts/bundle-macos.sh universal` for Apple silicon and Intel in one app (`rustup target add x86_64-apple-darwin` first). Bundles are ad-hoc signed unless `SIGNING_IDENTITY` names a Developer ID certificate.
+
+To make a notarized release ZIP, save notarization credentials once with `xcrun notarytool store-credentials`, then run `SIGNING_IDENTITY="Developer ID Application: …" NOTARY_PROFILE=… scripts/release-macos.sh`. It builds universal, signs with the hardened runtime, notarizes, staples and verifies, and writes `dist/Gradient-<version>-mac.zip`.
 
 For an isolated development profile:
 

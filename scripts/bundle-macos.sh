@@ -3,15 +3,37 @@ set -eu
 cd "$(dirname "$0")/.."
 profile=${1:-debug}
 case "$profile" in
-  release) cargo build --release --locked ;;
-  debug) cargo build --locked ;;
-  *) echo 'Usage: scripts/bundle-macos.sh [debug|release]' >&2; exit 1 ;;
+  release)
+    cargo build --release --locked
+    binary=target/release/gradient ;;
+  debug)
+    cargo build --locked
+    binary=target/debug/gradient ;;
+  universal)
+    cargo build --release --locked --target aarch64-apple-darwin
+    cargo build --release --locked --target x86_64-apple-darwin
+    mkdir -p target/universal
+    lipo -create -output target/universal/gradient \
+      target/aarch64-apple-darwin/release/gradient target/x86_64-apple-darwin/release/gradient
+    binary=target/universal/gradient ;;
+  *) echo 'Usage: scripts/bundle-macos.sh [debug|release|universal]' >&2; exit 1 ;;
 esac
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 bundle="$PWD/dist/Gradient.app"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
-cp "target/$profile/gradient" "$bundle/Contents/MacOS/gradient.new"
+cp "$binary" "$bundle/Contents/MacOS/gradient.new"
 mv "$bundle/Contents/MacOS/gradient.new" "$bundle/Contents/MacOS/gradient"
-cat > "$bundle/Contents/Info.plist" <<'PLIST'
+
+iconset="$PWD/target/Gradient.iconset"
+rm -rf "$iconset"
+mkdir -p "$iconset"
+for size in 16 32 128 256 512; do
+  sips -z $size $size assets/icon.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
+  sips -z $((size * 2)) $((size * 2)) assets/icon.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$iconset" -o "$bundle/Contents/Resources/Gradient.icns"
+
+cat > "$bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -19,9 +41,10 @@ cat > "$bundle/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.misc.gradient</string>
 <key>CFBundleName</key><string>Gradient</string>
 <key>CFBundleDisplayName</key><string>Gradient</string>
+<key>CFBundleIconFile</key><string>Gradient</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>$version</string>
+<key>CFBundleVersion</key><string>$version</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSCameraUsageDescription</key><string>Websites you allow can use the camera.</string>
@@ -38,5 +61,14 @@ cat > "$bundle/Contents/Info.plist" <<'PLIST'
 </dict></array>
 </dict></plist>
 PLIST
-codesign --force --deep --sign - "$bundle"
+
+# SIGNING_IDENTITY (a Developer ID Application certificate) signs for
+# distribution: hardened runtime, secure timestamp and the entitlements the
+# runtime needs for camera, microphone and location. Otherwise ad hoc.
+if [ -n "${SIGNING_IDENTITY:-}" ]; then
+  codesign --force --options runtime --timestamp \
+    --entitlements scripts/gradient.entitlements --sign "$SIGNING_IDENTITY" "$bundle"
+else
+  codesign --force --deep --sign - "$bundle"
+fi
 echo "$bundle"
