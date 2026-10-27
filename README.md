@@ -115,7 +115,7 @@ For agent access end to end, run a debug build against the fixture server with `
 python3 scripts/check-agent.py --profile /tmp/browser-dev --mode share
 ```
 
-The shared-fixture check changes only the disposable fixture's counter and text input. The default check verifies no tabs are exposed. See [VALIDATION.md](VALIDATION.md) for what was actually exercised.
+The shared-fixture check changes only the disposable fixture's counter and text input. The default check verifies no tabs are exposed.
 
 ## Linux path
 
@@ -129,6 +129,12 @@ Local files have limits. A local page's links to files outside its folder don't 
 
 Automatic tab eviction remains disabled. Work protection is a **heuristic, not the site's `beforeunload` contract**. On macOS an isolated [WKContentWorld](https://developer.apple.com/documentation/webkit/wkcontentworld) checks controls the user changed (trusted input/change events) against their DOM defaults, observed rich-text edits, open shadow roots, and same-origin frames. Values set by the page itself, playing media, and untouched canvas/embed content or cross-origin frames don't count. Resetting a form or updating its defaults after saving can clear its warning. Opaque content the user worked in, unavailable scripts, probe errors/timeouts and exceeded scan limits warn conservatively. Probes run on demand, without background timers or a website-to-native message handler. Temporary field/editor comparisons remain inside the isolated JavaScript world; Rust receives only risk and revision metadata, and no draft values are persisted.
 
-Native navigation holds WebKit's original decision and request through the confirmation, preserving POST bodies, history, reloads, and redirects. Approval is checked against the page again before proceeding; new observed edits invalidate it. It cannot reliably infer arbitrary SPA save state, unobserved programmatic rich-text changes, JavaScript-only editors, closed shadow roots, Web Audio, calls, or all frame lifecycle changes. Crashes and force quit are not protected. Confirmed destruction still loses drafts; session recovery restores addresses only. No private WebKit APIs are used. Linux retains conservative shell discard warnings; this native navigation guard is macOS-only and Linux remains untested.
+Native navigation holds WebKit's original decision and request through the confirmation, preserving POST bodies, history, reloads, and redirects. Approval is checked against the page again before proceeding; new observed edits invalidate it. It cannot reliably infer arbitrary SPA save state, unobserved programmatic rich-text changes, JavaScript-only editors, closed shadow roots, Web Audio, calls, or all frame lifecycle changes. Crashes and force quit are not protected. Confirmed destruction still loses drafts; session recovery restores addresses only. Work protection uses no private WebKit APIs. Linux retains conservative shell discard warnings; this native navigation guard is macOS-only and Linux remains untested.
 
 The repeatable macOS regression suite measures optimized builds including attributed WebKit/Metal helpers; see [PERFORMANCE.md](PERFORMANCE.md). Safari comparisons, battery/energy measurements, and complex real-site workloads remain unverified.
+
+Some features call WebKit's private API (SPI), as Safari-adjacent browsers commonly do, so a WebKit update can change or break them: media state and muting (`_isPlayingAudio`, `_setPageMuted:`, the now-playing session), find in page (`_findString:…`), the page's top color (`_sampledPageTopColor`), device capture settings, and paint timing. Builds that use SPI aren't eligible for the Mac App Store.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option. `vendor/gpui-pre-macos` is Zed Industries' GPUI macOS backend (Apache-2.0) with local changes described in `vendor/README.md`.

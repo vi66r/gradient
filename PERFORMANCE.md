@@ -45,7 +45,7 @@ This also explains the 2026-10-15 `after-blank-3` anomaly, where shell wakeups f
 
 A focused address bar keeps its caret blinking. In 10-second spot checks of the app process alone, the caret costs 30.3 wakeups/s and 1.01% CPU with the patch, against 123.8/s and 1.91% without. Each blink holds the link for one 100 ms park delay.
 
-Not measured: battery or energy, input latency with the link parked and woken, and behavior on an external 60 Hz display. Interactive UI checks are listed in VALIDATION.md.
+Not measured: battery or energy, input latency with the link parked and woken, and behavior on an external 60 Hz display.
 
 ## 2026-10-15 results
 
@@ -68,7 +68,7 @@ The practical improvement in this pass is native resize coordination and copy fe
 
 The cube is deliberately stable and small: it tests the embedding and frame pacing, not maximum GPU throughput or complex real websites. rAF intervals measure page scheduling, not physical display presentation or end-to-end input latency. Memory snapshots are not a leak proof. Interrupt wakeups are diagnostic, not energy in joules or battery life. Existing applications and system load remain running, so small differences should be treated as noise. No Safari comparison, Linux measurement, long-session leak test, or battery measurement is implied.
 
-Native resize, Inspector layout, tab state, and copy feedback need the separate UI checks recorded in VALIDATION.md. A native view's geometry must stay synchronized with the shell even when the page's animation frame rate remains stable.
+Native resize, Inspector layout, tab state, and copy feedback need separate interactive UI checks. A native view's geometry must stay synchronized with the shell even when the page's animation frame rate remains stable.
 
 Implementation references: Apple's [resource accounting definitions](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/resource.h) and [task resource collection](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c). The helper uses the SDK's struct definitions rather than guessing the rusage layout.
 

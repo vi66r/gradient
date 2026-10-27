@@ -35,7 +35,7 @@ choice to bring one into private browsing.
 - Extensions are added in a saved Space. The Private Space's menu manages
   the ones running there through the Space they came from.
 - Cost: a content blocker recompiles its rules each time the Private Space
-  opens, so the first pages there aren't filtered yet (see VALIDATION.md).
+  opens, so the first pages there aren't filtered yet.
 
 ## Tabs and windows
 
