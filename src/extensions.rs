@@ -663,7 +663,7 @@ impl Browser {
         engine::perform_extension_action(self.current_space().id, install, tab, anchor);
     }
 
-    /// Tools ▸ Add Extension…: an unpacked extension's folder or a `.zip`.
+    /// Browser ▸ Add Extension…: an unpacked extension's folder or a `.zip`.
     pub(crate) fn add_extension(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !engine::extensions_available() {
             self.notice = Some("Extensions need macOS 15.4 or later.".into());

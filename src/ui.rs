@@ -1197,6 +1197,7 @@ impl Render for Browser {
         // Every change to the tabs ends in a render, so extensions hear of
         // them here; unchanged tabs cost a comparison.
         self.sync_extension_tabs();
+        self.sync_menus(cx);
         let p = palette(self.dark);
         // A card open to agents glows: accent when shared, amber when its
         // site is trusted (see `engine::Page::set_shared`). Trusted pages
@@ -1387,8 +1388,20 @@ impl Render for Browser {
                 this.request_discard(lifecycle::Discard::Quit, w, cx);
             }))
             .on_action(cx.listener(|this, _: &ClearHistory, w, cx| this.clear_history(w, cx)))
-            .on_action(cx.listener(|this, action: &SetSearchEngine, _, cx| {
-                this.set_search_engine(action.engine, cx)
+            .on_action(cx.listener(|_, _: &menu_bar::About, _, _| crate::engine::show_about()))
+            .on_action(cx.listener(|_, _: &menu_bar::Hide, _, cx| cx.hide()))
+            .on_action(cx.listener(|_, _: &menu_bar::HideOthers, _, cx| cx.hide_other_apps()))
+            .on_action(cx.listener(|_, _: &menu_bar::ShowAll, _, cx| cx.unhide_other_apps()))
+            .on_action(cx.listener(|_, _: &menu_bar::Minimize, w, _| w.minimize_window()))
+            .on_action(cx.listener(|_, _: &menu_bar::ZoomWindow, w, _| w.zoom_window()))
+            .on_action(
+                cx.listener(|this, _: &menu_bar::EditUndo, w, cx| this.edit_undo(false, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &menu_bar::EditRedo, w, cx| this.edit_undo(true, w, cx)),
+            )
+            .on_action(cx.listener(|this, action: &menu_bar::SelectTab, w, cx| {
+                this.select_tab(action.index, w, cx)
             }))
             .child(self.sidebar(window, cx))
             .child(

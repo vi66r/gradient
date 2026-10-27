@@ -1950,3 +1950,95 @@ pub struct MediaState {
     pub muted: bool,
     pub session: bool,
 }
+
+/// Edit ▸ Undo and Redo while a page has the keyboard: WebKit keeps its
+/// edits on the page's own undo manager, which GPUI's menu never reaches.
+/// False when no page has the keyboard, so the shell's fields take it.
+pub fn page_undo(redo: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::{ClassType, runtime::NSObjectProtocol};
+        use objc2_app_kit::{NSApplication, NSResponder, NSView};
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return false;
+        };
+        let app = NSApplication::sharedApplication(mtm);
+        // The front window, even while another app is active.
+        let Some(responder) = app
+            .keyWindow()
+            .or_else(|| app.orderedWindows().firstObject())
+            .and_then(|window| window.firstResponder())
+        else {
+            return false;
+        };
+        let Ok(view) = responder.downcast::<NSView>() else {
+            return false;
+        };
+        // WebKit may hand the keyboard to a view inside the web view.
+        let mut current = Some(view);
+        while let Some(view) = current {
+            if view.isKindOfClass(objc2_web_kit::WKWebView::class()) {
+                let responder: &NSResponder = &view;
+                if let Some(undo) = responder.undoManager() {
+                    if redo && undo.canRedo() {
+                        undo.redo();
+                    } else if !redo && undo.canUndo() {
+                        undo.undo();
+                    }
+                }
+                return true;
+            }
+            // SAFETY: read on the main thread, where views live.
+            current = unsafe { view.superview() };
+        }
+        false
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = redo;
+        false
+    }
+}
+
+/// Browser ▸ About Browser: the standard panel, named and versioned from
+/// the app bundle.
+pub fn show_about() {
+    #[cfg(target_os = "macos")]
+    if let Some(mtm) = objc2::MainThreadMarker::new() {
+        objc2_app_kit::NSApplication::sharedApplication(mtm).orderFrontStandardAboutPanel(None);
+    }
+}
+
+/// Gives Window ▸ Minimize and Zoom AppKit's own selectors, so AppKit
+/// recognizes them and puts its tiling items after them, as in other apps.
+/// GPUI builds every item with its own selector; run after each rebuild.
+pub fn native_window_menu() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::sel;
+        use objc2_app_kit::NSApplication;
+        use objc2_foundation::NSString;
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        let Some(menu) = NSApplication::sharedApplication(mtm)
+            .mainMenu()
+            .and_then(|bar| bar.itemWithTitle(&NSString::from_str("Window")))
+            .and_then(|item| item.submenu())
+        else {
+            return;
+        };
+        for (title, action) in [
+            ("Minimize", sel!(performMiniaturize:)),
+            ("Zoom", sel!(performZoom:)),
+        ] {
+            if let Some(item) = menu.itemWithTitle(&NSString::from_str(title)) {
+                // SAFETY: a nil target sends the action to the key window.
+                unsafe {
+                    item.setTarget(None);
+                    item.setAction(Some(action));
+                }
+            }
+        }
+    }
+}

@@ -10,6 +10,7 @@ mod history_view;
 mod http_client;
 mod lifecycle;
 mod mcp;
+mod menu_bar;
 mod model;
 mod permissions;
 mod session;
@@ -21,7 +22,7 @@ mod zoom;
 
 use gpui::component::{
     Theme, ThemeMode,
-    input::{self, InputEvent, InputState, TextareaState},
+    input::{InputEvent, InputState, TextareaState},
 };
 use gpui::{prelude::*, *};
 use model::{START, SavedTab, Session};
@@ -71,13 +72,6 @@ actions!(
         Quit
     ]
 );
-
-/// Browser ▸ Search Engine: where searches from the address field go.
-#[derive(Clone, PartialEq, serde::Deserialize, Action)]
-#[action(namespace = browser, no_json)]
-struct SetSearchEngine {
-    engine: model::SearchEngine,
-}
 
 /// What the card shows in place of the page.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -258,6 +252,8 @@ struct Browser {
     notice: Option<String>,
     copy_feedback: Option<CopyTarget>,
     copy_epoch: u64,
+    /// What the menu bar shows now; see `menu_bar.rs`.
+    menus: Option<menu_bar::MenuState>,
     /// The field was filled and selected ahead of its focus event.
     address_primed: bool,
     /// Where a press on the resting address began, until it clicks or drags.
@@ -450,6 +446,7 @@ impl Browser {
             notice,
             copy_feedback: None,
             copy_epoch: 0,
+            menus: None,
             address_primed: false,
             address_press: None,
             discard_pending: false,
@@ -753,13 +750,12 @@ impl Browser {
         }
     }
 
-    /// Browser ▸ Search Engine.
+    /// Settings ▸ Search engine.
     fn set_search_engine(&mut self, engine: model::SearchEngine, cx: &mut Context<Self>) {
         self.settings.search = engine;
         if let Err(error) = self.settings.save(self.store.dir()) {
             self.notice = Some(format!("Search engine not saved: {error}"));
         }
-        cx.set_menus(menus(engine));
         cx.notify();
     }
 
@@ -932,7 +928,7 @@ impl Browser {
         let detail = if tab.private {
             Some("Private tabs don’t remember this choice.")
         } else if remember {
-            Some("“Allow” remembers this for the site. Reset it in Tools ▸ Site Permissions.")
+            Some("“Allow” remembers this for the site. Reset it in Settings.")
         } else {
             None
         };
@@ -973,7 +969,7 @@ impl Browser {
         .detach();
     }
 
-    /// Tools ▸ Site Permissions: shows what the current site may use and
+    /// Tab ▸ Site Permissions: shows what the current site may use and
     /// forgets it on request, stopping any capture it has running.
     fn site_permissions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab = &self.tabs[self.active];
@@ -1281,7 +1277,6 @@ impl Browser {
         let item = |command| Box::new(TabMenu { id, command }) as Box<dyn Action>;
         let live = tab.page.is_some();
         let addressed = tab.saved.url != START;
-        let local = model::is_file_url(&tab.saved.url);
         let mut menu = NativeMenu::new();
         if live {
             menu = menu.menu("Reload", item(Reload));
@@ -1295,13 +1290,9 @@ impl Browser {
         } else {
             menu.menu_with_disabled("Resume Tab", !addressed, item(Resume))
         };
-        if !tab.private {
-            menu = match tab.grant {
-                Some(_) => menu.menu("Revoke Agent Access", item(ToggleAgent)),
-                None => {
-                    menu.menu_with_disabled("Share with Agent", !live || local, item(ToggleAgent))
-                }
-            };
+        if let Some(agent) = self.agent_item(tab) {
+            let share = agent == menu_bar::Agent::Share;
+            menu = menu.menu_with_disabled(agent.label(), share && !live, item(ToggleAgent));
         }
         let elsewhere: Vec<&spaces::Space> = self
             .spaces
@@ -2398,79 +2389,6 @@ impl Browser {
     }
 }
 
-/// The menu bar; rebuilt when the search engine changes, for its checkmark.
-fn menus(engine: model::SearchEngine) -> Vec<Menu> {
-    vec![
-        Menu::new("Browser").items([
-            MenuItem::action("Settings…", ShowSettings),
-            MenuItem::submenu(
-                Menu::new("Search Engine").items(model::SearchEngine::ALL.map(|choice| {
-                    MenuItem::action(choice.name(), SetSearchEngine { engine: choice })
-                        .checked(choice == engine)
-                })),
-            ),
-            MenuItem::separator(),
-            MenuItem::action("Quit Browser", Quit),
-        ]),
-        Menu::new("File").items([
-            MenuItem::action("New Tab", NewTab),
-            MenuItem::action("New Private Tab", NewPrivateTab),
-            MenuItem::action("Open File…", OpenFile),
-            MenuItem::action("Close Tab", CloseTab),
-            MenuItem::action("Reopen Closed Tab", ReopenTab),
-            MenuItem::separator(),
-            MenuItem::action("Print…", Print),
-        ]),
-        Menu::new("Edit").items([
-            MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
-            MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
-            MenuItem::separator(),
-            MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
-            MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
-            MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
-            MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
-            MenuItem::separator(),
-            MenuItem::action("Find…", Find),
-            MenuItem::action("Find Next", FindNext),
-            MenuItem::action("Find Previous", FindPrevious),
-        ]),
-        Menu::new("View").items([
-            MenuItem::action("Actual Size", ActualSize),
-            MenuItem::action("Zoom In", ZoomIn),
-            MenuItem::action("Zoom Out", ZoomOut),
-        ]),
-        Menu::new("Navigate").items([
-            MenuItem::action("Open Location", FocusAddress),
-            MenuItem::action("Copy Address", CopyUrl),
-            MenuItem::action("Back", Back),
-            MenuItem::action("Forward", Forward),
-            MenuItem::action("Reload", Reload),
-            MenuItem::action("Next Tab", NextTab),
-            MenuItem::action("Previous Tab", PreviousTab),
-        ]),
-        Menu::new("History").items([
-            MenuItem::action("Show All History", ShowHistory),
-            MenuItem::action("Clear History…", ClearHistory),
-        ]),
-        Menu::new("Spaces").items([
-            MenuItem::action("New Space", NewSpace),
-            MenuItem::action("Rename Space…", RenameSpace),
-            MenuItem::action("Delete Space…", DeleteSpace),
-            MenuItem::separator(),
-            MenuItem::action("Next Space", NextSpace),
-            MenuItem::action("Previous Space", PreviousSpace),
-        ]),
-        Menu::new("Tools").items([
-            MenuItem::action("Request Lab", RequestLab),
-            MenuItem::action("Inspect Page", Inspect),
-            MenuItem::action("Site Permissions…", SitePermissions),
-            MenuItem::action("Add Extension…", AddExtension),
-            MenuItem::action("Suspend Current Tab…", Suspend),
-            MenuItem::action("Share / Revoke Agent Access…", ToggleAgent),
-        ]),
-    ]
-}
-
 fn profile_id(dir: &std::path::Path) -> anyhow::Result<[u8; 16]> {
     let path = dir.join("profile-id");
     if path.exists() {
@@ -2537,6 +2455,10 @@ fn main() -> anyhow::Result<()> {
             KeyBinding::new(&format!("{modifier}-["), Back, None),
             KeyBinding::new(&format!("{modifier}-]"), Forward, None),
             KeyBinding::new(&format!("{modifier}-r"), Reload, None),
+            // Listed first, so the menu shows them: GPUI can't give a menu
+            // item the Tab key, and would arm ⌃T instead.
+            KeyBinding::new(&format!("{modifier}-shift-]"), NextTab, None),
+            KeyBinding::new(&format!("{modifier}-shift-["), PreviousTab, None),
             KeyBinding::new("ctrl-tab", NextTab, None),
             KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
             KeyBinding::new(&format!("{modifier}-shift-j"), RequestLab, None),
@@ -2552,6 +2474,11 @@ fn main() -> anyhow::Result<()> {
             KeyBinding::new(&format!("{modifier}-0"), ActualSize, None),
             KeyBinding::new(&format!("{modifier}-p"), Print, None),
             KeyBinding::new(&format!("{modifier}-q"), Quit, None),
+            KeyBinding::new(&format!("{modifier}-z"), menu_bar::EditUndo, None),
+            KeyBinding::new(&format!("{modifier}-shift-z"), menu_bar::EditRedo, None),
+            KeyBinding::new(&format!("{modifier}-m"), menu_bar::Minimize, None),
+            KeyBinding::new("cmd-h", menu_bar::Hide, None),
+            KeyBinding::new("cmd-alt-h", menu_bar::HideOthers, None),
             KeyBinding::new("ctrl-]", NextSpace, None),
             KeyBinding::new("ctrl-[", PreviousSpace, None),
         ]);
@@ -2562,7 +2489,13 @@ fn main() -> anyhow::Result<()> {
                 None,
             )
         }));
-        cx.set_menus(menus(search));
+        cx.bind_keys((1..=9).map(|number| {
+            KeyBinding::new(
+                &format!("{modifier}-{number}"),
+                menu_bar::SelectTab { index: number - 1 },
+                None,
+            )
+        }));
         let (handle, view) = gpui::open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
