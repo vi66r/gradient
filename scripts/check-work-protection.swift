@@ -1,4 +1,4 @@
-// Native WebKit regression tests for the SAME isolated script used by Browser.
+// Native WebKit regression tests for the SAME isolated script used by Gradient.
 // Run from the repo root: swift scripts/check-work-protection.swift
 //
 // Only user-produced work counts, so edits here are real AppKit key and mouse
@@ -12,7 +12,7 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 
 @MainActor final class Checks: NSObject, WKNavigationDelegate {
-    let world = WKContentWorld.world(name: "Browser Work Protection")
+    let world = WKContentWorld.world(name: "Gradient Work Protection")
     var view: WKWebView!
     var window: NSWindow!
     var count = 0

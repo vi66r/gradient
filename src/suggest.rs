@@ -796,7 +796,7 @@ impl Browser {
             gpui::PromptLevel::Warning,
             &format!("Clear the history of “{name}”?"),
             Some(
-                "Browser forgets the pages this Space visited, so they stop showing up as suggestions. Open tabs, sign-ins and other Spaces stay as they are.",
+                "Gradient forgets the pages this Space visited, so they stop showing up as suggestions. Open tabs, sign-ins and other Spaces stay as they are.",
             ),
             &["Cancel", "Clear History"],
             cx,

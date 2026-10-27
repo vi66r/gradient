@@ -24,7 +24,7 @@ use std::{
 fn world() -> Retained<WKContentWorld> {
     unsafe {
         WKContentWorld::worldWithName(
-            &NSString::from_str("Browser Work Protection"),
+            &NSString::from_str("Gradient Work Protection"),
             MainThreadMarker::new().unwrap(),
         )
     }
@@ -106,8 +106,8 @@ pub struct Ivars {
     events: Sender<Event>,
     file_gate: super::FileGate,
     dropped: Dropped,
-    /// The local file Browser itself is loading (address field, drop, open
-    /// panel, restore); its main-frame decision is Browser's, not the page's.
+    /// The local file Gradient itself is loading (address field, drop, open
+    /// panel, restore); its main-frame decision is Gradient's, not the page's.
     file: RefCell<Option<PathBuf>>,
     foreground: gpui::ForegroundExecutor,
     background: gpui::BackgroundExecutor,
@@ -228,7 +228,7 @@ define_class!(
                     return;
                 }
             }
-            // Local files: Browser may load them (and replay them through its
+            // Local files: Gradient may load them (and replay them through its
             // own Back/Forward/Reload), and a local page may link to another.
             // A web page may never navigate to or open one, in any frame.
             let file = scheme.as_deref() == Some("file");

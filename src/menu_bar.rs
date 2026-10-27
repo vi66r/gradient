@@ -185,19 +185,19 @@ pub(crate) fn menus(state: &MenuState) -> Vec<Menu> {
     }));
 
     vec![
-        Menu::new("Browser").items([
-            MenuItem::action("About Browser", About),
+        Menu::new("Gradient").items([
+            MenuItem::action("About Gradient", About),
             MenuItem::separator(),
             MenuItem::action("Settings…", ShowSettings),
             MenuItem::action("Add Extension…", AddExtension),
             MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
-            MenuItem::action("Hide Browser", Hide),
+            MenuItem::action("Hide Gradient", Hide),
             MenuItem::action("Hide Others", HideOthers),
             MenuItem::action("Show All", ShowAll),
             MenuItem::separator(),
-            MenuItem::action("Quit Browser", Quit),
+            MenuItem::action("Quit Gradient", Quit),
         ]),
         Menu::new("File").items([
             MenuItem::action("New Tab", NewTab),
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(
             titles,
             [
-                "Browser", "File", "Edit", "View", "History", "Spaces", "Tab", "Develop", "Window",
+                "Gradient", "File", "Edit", "View", "History", "Spaces", "Tab", "Develop", "Window",
                 "Help"
             ]
         );

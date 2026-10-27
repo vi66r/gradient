@@ -16,7 +16,7 @@ pub enum Kind {
     Location,
     Notifications,
     /// Trusted by the user for agents: full access, in any tab on the site
-    /// (`agent.rs`). Only ever granted from Browser's own UI.
+    /// (`agent.rs`). Only ever granted from Gradient's own UI.
     Agents,
 }
 

@@ -162,7 +162,7 @@ fn error(message: &str) -> Retained<NSError> {
         &[&*Retained::into_super(Retained::into_super(text))],
     );
     unsafe {
-        NSError::errorWithDomain_code_userInfo(&NSString::from_str("Browser"), 1, Some(&info))
+        NSError::errorWithDomain_code_userInfo(&NSString::from_str("Gradient"), 1, Some(&info))
     }
 }
 
@@ -201,7 +201,7 @@ impl Drop for OpenTab {
         if let Some(handler) = self.0.take() {
             handler.call((
                 std::ptr::null_mut(),
-                Retained::as_ptr(&error("Browser didn’t open the tab.")) as *mut _,
+                Retained::as_ptr(&error("Gradient didn’t open the tab.")) as *mut _,
             ));
         }
     }
@@ -436,7 +436,7 @@ define_class!(
                     handler.call((std::ptr::null_mut(),));
                 }
                 None => handler.call((Retained::as_ptr(&error(
-                    "Browser opens only web and extension pages in tabs.",
+                    "Gradient opens only web and extension pages in tabs.",
                 )) as *mut _,)),
             }
         }
@@ -612,7 +612,7 @@ define_class!(
             // tabs, not windows of its own.
             handler.call((
                 std::ptr::null_mut(),
-                Retained::as_ptr(&error("Browser doesn’t open windows for extensions.")) as *mut _,
+                Retained::as_ptr(&error("Gradient doesn’t open windows for extensions.")) as *mut _,
             ));
         }
 
@@ -723,7 +723,7 @@ define_class!(
                 Some(relay) => relay.send(context, application, message, reply.copy()),
                 None => reply.call((
                     std::ptr::null_mut(),
-                    Retained::as_ptr(&error("No app answers this extension in Browser yet."))
+                    Retained::as_ptr(&error("No app answers this extension in Gradient yet."))
                         as *mut _,
                 )),
             }
@@ -740,7 +740,7 @@ define_class!(
             match NATIVE.with_borrow(Clone::clone) {
                 Some(relay) => relay.connect(context, port, done.copy()),
                 None => done.call((Retained::as_ptr(&error(
-                    "No app answers this extension in Browser yet.",
+                    "No app answers this extension in Gradient yet.",
                 )) as *mut _,)),
             }
         }
@@ -832,8 +832,8 @@ fn present(
 ) -> Result<(), &'static str> {
     let popover: Retained<NSPopover> =
         unsafe { action.popupPopover() }.ok_or("This extension has no popup.")?;
-    let window = app_window(mtm).ok_or("Browser has no window.")?;
-    let content = window.contentView().ok_or("Browser has no window.")?;
+    let window = app_window(mtm).ok_or("Gradient has no window.")?;
+    let content = window.contentView().ok_or("Gradient has no window.")?;
     let height = content.bounds().size.height;
     // The shell records anchors in window coordinates with a top-left
     // origin; the content view is unflipped. Without one (a popup the
@@ -886,7 +886,7 @@ fn ensure(
         }
     };
     unsafe {
-        // Extension pages and workers identify as Safari, as Browser's pages
+        // Extension pages and workers identify as Safari, as Gradient's pages
         // do; extensions pick their code paths by user agent (Bitwarden's
         // background crashed without it).
         let pages = WKWebViewConfiguration::new(mtm);
@@ -1019,7 +1019,7 @@ fn order(space: &Space) {
 
 /// An extension folder's URL. WebKit hits an assertion (and the app stops)
 /// reading an extension from a relative file URL, which a relative
-/// `BROWSER_DATA_DIR` would produce.
+/// `GRADIENT_DATA_DIR` would produce.
 fn folder_url(dir: &std::path::Path) -> Retained<NSURL> {
     let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
     NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&dir.to_string_lossy()), true)

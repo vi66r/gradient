@@ -2,10 +2,10 @@
 //! flight, already has. The list of downloads lives in memory only.
 use std::path::{Path, PathBuf};
 
-/// Where downloads are saved. `BROWSER_DOWNLOADS_DIR` points a disposable
-/// profile somewhere else, like `BROWSER_DATA_DIR`.
+/// Where downloads are saved. `GRADIENT_DOWNLOADS_DIR` points a disposable
+/// profile somewhere else, like `GRADIENT_DATA_DIR`.
 pub fn dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("BROWSER_DOWNLOADS_DIR") {
+    if let Some(dir) = std::env::var_os("GRADIENT_DOWNLOADS_DIR") {
         return PathBuf::from(dir);
     }
     PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("Downloads")

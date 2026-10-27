@@ -14,17 +14,17 @@ pub struct Store {
 }
 
 pub fn data_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("BROWSER_DATA_DIR") {
+    if let Some(dir) = std::env::var_os("GRADIENT_DATA_DIR") {
         return PathBuf::from(dir);
     }
     let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
     if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/RafiBrowser")
+        home.join("Library/Application Support/Gradient")
     } else {
         std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".local/share"))
-            .join("rafi-browser")
+            .join("gradient")
     }
 }
 
@@ -42,7 +42,7 @@ impl Store {
                 .truncate(false)
                 .mode(0o600)
                 .open(dir.join("session.lock"))?;
-            lock.try_lock_exclusive().context("This Browser profile is already open. Use BROWSER_DATA_DIR for a separate profile.")?;
+            lock.try_lock_exclusive().context("This Gradient profile is already open. Use GRADIENT_DATA_DIR for a separate profile.")?;
             Ok(Self {
                 dir,
                 _lock: lock,

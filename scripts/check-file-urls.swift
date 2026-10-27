@@ -1,12 +1,12 @@
 // Real WebKit checks for local files, in an ephemeral data store.
 // Run from the repo root: swift scripts/check-file-urls.swift
 //
-// Confirms what Browser relies on: `loadFileURL:allowingReadAccessToURL:` with
+// Confirms what Gradient relies on: `loadFileURL:allowingReadAccessToURL:` with
 // the file's folder loads a local page and its relative image, a local page can
 // link to a sibling file, and a web page can't take the main frame to file:
-// even when the navigation delegate would allow it (Browser's own policy in
+// even when the navigation delegate would allow it (Gradient's own policy in
 // `engine/protection.rs` is a second, explicit layer). INFO lines record
-// behaviour Browser doesn't depend on.
+// behaviour Gradient doesn't depend on.
 import AppKit
 import WebKit
 
@@ -145,14 +145,14 @@ struct Decision { let url: String; let main: Bool; let source: String?; let type
         try await Task.sleep(nanoseconds: 1_000_000_000)
         print("INFO web page file: iframe reached the delegate: \(decisions.contains { $0.url.hasPrefix("file:") })")
 
-        // The address field on a tab showing a web page: Browser's own load.
+        // The address field on a tab showing a web page: Gradient's own load.
         decisions.removeAll()
         web.loadFileURL(index, allowingReadAccessTo: site)
         guard try await settle() == true, web.url?.isFileURL == true,
               try await js("pixel.complete && pixel.naturalWidth === 1") as? Bool == true
         else { fail("loadFileURL from a web page did not load the file with its image") }
         let fromWeb = decisions.first { $0.url.hasPrefix("file:") }
-        pass("loadFileURL replaces a web page (decision source: \(fromWeb?.source ?? "nil"), so Browser matches its expected path, not the source)")
+        pass("loadFileURL replaces a web page (decision source: \(fromWeb?.source ?? "nil"), so Gradient matches its expected path, not the source)")
         web.goBack()
         _ = try await settle()
         guard web.url?.scheme == "http" else { fail("Back to the web page failed") }

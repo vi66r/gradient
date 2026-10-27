@@ -9,7 +9,7 @@ Build the release bundle first; do not compile while collecting samples. Keep th
 ```sh
 python3 scripts/test-server.py --port 8766 --reports artifacts/performance/reports
 # In another terminal:
-python3 scripts/benchmark-macos.py dist/Browser.app --label candidate
+python3 scripts/benchmark-macos.py dist/Gradient.app --label candidate
 ```
 
 The runner launches fresh instances through Launch Services with disposable profiles and terminates only its own instances. Close the bundle being tested before starting. The normal browsing profile is not used. WebKit manages website data separately from the disposable session directory.
@@ -20,7 +20,7 @@ Each of three trials contains a blank window, an idle static interaction fixture
 
 `window-visibility.c` samples the app's main window every second. Each run aborts unless at least 90% of the window stays uncovered on the current Space. An occluded window stops GPUI's display link, so a hidden window understates idle wakeups. Window bounds and ownership need no Screen Recording permission. The runner also reports the app process's own wakeups separately from its WebKit helpers.
 
-The SPI is confined to a developer diagnostic executable and is not shipped or linked into Browser. Its availability and attribution are checked on each invocation. GPU page reports track hidden-page transitions and surface WebGPU errors. Static reports check visibility when the report is sent; blank windows have no page visibility guard. See the anomalous blank run below. The runner aborts on missing reports or inaccessible process samples.
+The SPI is confined to a developer diagnostic executable and is not shipped or linked into Gradient. Its availability and attribution are checked on each invocation. GPU page reports track hidden-page transitions and surface WebGPU errors. Static reports check visibility when the report is sent; blank windows have no page visibility guard. See the anomalous blank run below. The runner aborts on missing reports or inaccessible process samples.
 
 ## 2026-10-20 results: idle display-link parking
 
@@ -37,7 +37,7 @@ Three-trial medians, before → after:
 
 All three trials of each workload agreed within a few tenths. The ~121 removed wakeups/sec match one GPUI display-link tick per 120 Hz vsync. The blank window's remaining 1/sec is the shell's one-second URL/session poll (`main.rs`). The static workloads' extra ~3/sec come from WebKit helpers and the fixture's reporting timer.
 
-WebGPU frame pacing is unchanged: 60 FPS in all six runs, p95 19–20 ms → 19 ms, p99 22 → 21 ms, zero intervals over 50 ms. The cube page still paces at 60 FPS on this display. GPU-workload CPU did not fall, because the app process's share there (7.8–8.0% in both cohorts) is WebKit compositing inside the app. All three candidate GPU runs were 0.6–1.2 points higher in total. The difference is in WebKit's GPU process (7.2–7.4% → 7.8–8.0%), not Browser's own process. The 1-minute load average reached 14–16 during two candidate GPU runs. This difference is unexplained and is not counted as a gain or a regression.
+WebGPU frame pacing is unchanged: 60 FPS in all six runs, p95 19–20 ms → 19 ms, p99 22 → 21 ms, zero intervals over 50 ms. The cube page still paces at 60 FPS on this display. GPU-workload CPU did not fall, because the app process's share there (7.8–8.0% in both cohorts) is WebKit compositing inside the app. All three candidate GPU runs were 0.6–1.2 points higher in total. The difference is in WebKit's GPU process (7.2–7.4% → 7.8–8.0%), not Gradient's own process. The 1-minute load average reached 14–16 during two candidate GPU runs. This difference is unexplained and is not counted as a gain or a regression.
 
 Memory is unchanged. These footprints are higher than the 2026-10-15 cohort because that cohort ran on an external display at DPR 1. Do not compare memory across the two cohorts.
 

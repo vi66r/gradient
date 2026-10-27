@@ -1,5 +1,5 @@
-// macOS-only diagnostic helper; never linked into Browser.
-// Responsibility SPI identifies XPC helpers whose parent is launchd, not Browser.
+// macOS-only diagnostic helper; never linked into Gradient.
+// Responsibility SPI identifies XPC helpers whose parent is launchd, not Gradient.
 #include <libproc.h>
 #include <sys/resource.h>
 #include <stdio.h>

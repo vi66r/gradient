@@ -140,7 +140,7 @@ impl Find {
             search(&view, &query, options);
         });
         let world =
-            unsafe { WKContentWorld::worldWithName(&NSString::from_str("Browser Find"), mtm) };
+            unsafe { WKContentWorld::worldWithName(&NSString::from_str("Gradient Find"), mtm) };
         unsafe {
             self.view
                 .evaluateJavaScript_inFrame_inContentWorld_completionHandler(

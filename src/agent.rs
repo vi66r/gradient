@@ -1,7 +1,7 @@
-//! Agents' access to tabs, which only the user grants, in Browser's own UI:
+//! Agents' access to tabs, which only the user grants, in Gradient's own UI:
 //! - Shared: one tab, for this session, on its current site. Untrusted:
 //!   the agent reads only what a person could see, acts by real clicks and
-//!   typing, stays on the site, and Browser asks the user before a click
+//!   typing, stays on the site, and Gradient asks the user before a click
 //!   that may submit or change something.
 //! - Trusted: a site the user trusts, remembered with its other site
 //!   permissions until they withdraw it. Every tab on it is open to agents
@@ -118,7 +118,7 @@ impl Browser {
             PromptLevel::Warning,
             "Share this tab with agents?",
             Some(&format!(
-                "Connected local agents may read what you can see in this tab on {host} and click and type in it; Browser asks you before anything that may submit or change something. Content may be sent to their model provider. Sharing ends when you stop it, the tab leaves {host}, or Browser quits.\n\nTrusting {host} instead gives agents full access in every tab on it, as for a site you're developing."
+                "Connected local agents may read what you can see in this tab on {host} and click and type in it; Gradient asks you before anything that may submit or change something. Content may be sent to their model provider. Sharing ends when you stop it, the tab leaves {host}, or Gradient quits.\n\nTrusting {host} instead gives agents full access in every tab on it, as for a site you're developing."
             )),
             &["Cancel", "Share Tab", "Trust Site…"],
             cx,
@@ -310,7 +310,7 @@ impl Browser {
         let access = self.agent_access(tab).ok_or_else(unavailable)?;
         anyhow::ensure!(
             !mcp::needs_trust(&command.name) || access.trusted(),
-            "{} needs the site to be trusted. The user can trust it from the agent button in Browser.",
+            "{} needs the site to be trusted. The user can trust it from the agent button in Gradient.",
             command.name
         );
         anyhow::ensure!(!tab.loading, "Wait for the page to finish loading");
@@ -387,7 +387,7 @@ impl Browser {
     /// on the loopback fixture server as it loads, without the prompts.
     #[cfg(debug_assertions)]
     pub(crate) fn test_agent_access(&mut self, id: u64) {
-        let Ok(level) = std::env::var("BROWSER_TEST_AGENT") else {
+        let Ok(level) = std::env::var("GRADIENT_TEST_AGENT") else {
             return;
         };
         let Some(tab) = self.tabs.iter().find(|tab| tab.id == id) else {
@@ -417,7 +417,7 @@ impl Browser {
 }
 
 /// One agent action in progress. It checks the tab's access again before
-/// each step, so stopping access in Browser stops it partway.
+/// each step, so stopping access in Gradient stops it partway.
 struct Job {
     id: u64,
     access: Access,

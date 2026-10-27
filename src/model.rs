@@ -251,7 +251,7 @@ pub fn file_path(value: &str) -> Option<std::path::PathBuf> {
     url.to_file_path().ok()
 }
 
-/// Policy for any navigation to a `file:` URL. Browser may start one (address
+/// Policy for any navigation to a `file:` URL. Gradient may start one (address
 /// field, drop, open panel, session restore, its own Back/Forward/Reload), and
 /// a local page may link to another local file. A web page may never navigate
 /// to or open one, in any frame.
@@ -275,7 +275,7 @@ pub fn file_problem(value: &str) -> Option<String> {
     };
     match std::fs::metadata(&path) {
         Ok(metadata) if metadata.is_dir() => {
-            Some("Browser can't show folders. Open a file instead.".into())
+            Some("Gradient can't show folders. Open a file instead.".into())
         }
         Ok(_) => None,
         Err(_) => Some(format!(
@@ -448,7 +448,7 @@ impl Session {
 
     pub fn validate(&self) -> Result<()> {
         if self.version != 2 {
-            bail!("This session was created by an unsupported Browser version.");
+            bail!("This session was created by an unsupported Gradient version.");
         }
         if self.spaces.is_empty() || self.spaces.len() > MAX_SPACES {
             bail!("The session has an unsupported number of Spaces.");

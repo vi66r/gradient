@@ -72,7 +72,7 @@ class Handler(BaseHTTPRequestHandler):
     def api(self):
         body = self.rfile.read(min(int(self.headers.get("Content-Length", 0)), 1024 * 1024))
         content = json.dumps({"method": self.command, "path": self.path,
-                              "test_header": self.headers.get("X-Browser-Test"),
+                              "test_header": self.headers.get("X-Gradient-Test"),
                               "body": body.decode("utf-8", errors="replace")}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -89,5 +89,5 @@ if __name__ == "__main__":
     server.reports = args.reports
     if args.reports is not None:
         args.reports.mkdir(parents=True, exist_ok=True)
-    print(f"Browser fixture: http://127.0.0.1:{server.server_port}", flush=True)
+    print(f"Gradient fixture: http://127.0.0.1:{server.server_port}", flush=True)
     server.serve_forever()

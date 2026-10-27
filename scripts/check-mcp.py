@@ -8,11 +8,11 @@ import subprocess
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--profile', required=True)
-parser.add_argument('--binary', default=str(Path(__file__).resolve().parents[1] / 'target/debug/browser'))
+parser.add_argument('--binary', default=str(Path(__file__).resolve().parents[1] / 'target/debug/gradient'))
 parser.add_argument('--shared-fixture', action='store_true')
 args = parser.parse_args()
 process = subprocess.Popen([args.binary, 'mcp'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                           text=True, env={**os.environ, 'BROWSER_DATA_DIR': args.profile})
+                           text=True, env={**os.environ, 'GRADIENT_DATA_DIR': args.profile})
 sequence = 0
 
 def rpc(method, params):
@@ -43,7 +43,7 @@ try:
         assert len(tabs) == 1 and tabs[0]['url'] == 'http://127.0.0.1:8765/', 'Share only the localhost fixture.'
         tab = {'tab_id': tabs[0]['tab_id']}
         page = tool('browser_read_page', tab)
-        assert page['title'] == 'Browser interaction test'
+        assert page['title'] == 'Gradient interaction test'
         assert 'Native shell. Real web.' in page['text']
         assert tool('browser_click', {**tab, 'selector': '#increment'})['clicked']
         assert tool('browser_fill', {**tab, 'selector': '#draft', 'value': 'MCP fixture draft'})['filled']

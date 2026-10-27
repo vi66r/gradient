@@ -350,7 +350,7 @@ impl Browser {
     pub(crate) fn new_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let saved = self.spaces.iter().filter(|space| !space.private).count();
         if saved >= MAX_SPACES {
-            self.notice = Some(format!("Browser keeps at most {MAX_SPACES} Spaces."));
+            self.notice = Some(format!("Gradient keeps at most {MAX_SPACES} Spaces."));
             cx.notify();
             return;
         }

@@ -112,8 +112,8 @@ impl Discard {
                 "Some of its tabs have edits you haven’t saved. Deleting the Space discards them.",
             ),
             Self::Quit => (
-                "Quit Browser?",
-                "Quit Browser",
+                "Quit Gradient?",
+                "Quit Gradient",
                 "Some tabs have edits you haven’t saved. Quitting discards them. Tab addresses are restored next time, except private tabs; Request Lab drafts aren’t saved.",
             ),
         }

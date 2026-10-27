@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Exercise agent access end to end through the MCP bridge.
 
-Run a debug build with BROWSER_TEST_AGENT=share (or trust) and
-BROWSER_DATA_DIR=<profile>, open http://127.0.0.1:8765/agent from
+Run a debug build with GRADIENT_TEST_AGENT=share (or trust) and
+GRADIENT_DATA_DIR=<profile>, open http://127.0.0.1:8765/agent from
 scripts/test-server.py, keep the window on screen, then:
 
     python3 scripts/check-agent.py --profile <profile> --mode share
@@ -19,10 +19,10 @@ import time
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--profile', required=True)
 parser.add_argument('--mode', choices=['share', 'trust'], required=True)
-parser.add_argument('--binary', default=str(Path(__file__).resolve().parents[1] / 'target/debug/browser'))
+parser.add_argument('--binary', default=str(Path(__file__).resolve().parents[1] / 'target/debug/gradient'))
 args = parser.parse_args()
 process = subprocess.Popen([args.binary, 'mcp'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                           text=True, env={**os.environ, 'BROWSER_DATA_DIR': args.profile})
+                           text=True, env={**os.environ, 'GRADIENT_DATA_DIR': args.profile})
 sequence = 0
 
 

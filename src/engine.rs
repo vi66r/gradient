@@ -558,7 +558,7 @@ impl Parent {
         use wry::raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let RawWindowHandle::AppKit(handle) = HasWindowHandle::window_handle(window)?.as_raw()
         else {
-            anyhow::bail!("Browser needs an AppKit window.");
+            anyhow::bail!("Gradient needs an AppKit window.");
         };
         // The handle's view belongs to the window and is alive here.
         let view = unsafe { handle.ns_view.cast::<objc2_app_kit::NSView>().as_ref() };
@@ -609,7 +609,7 @@ fn handlers<'a>(
         })
         .with_navigation_handler(move |url| {
             if crate::model::is_file_url(&url) {
-                // Browser applied the file policy before admitting this.
+                // Gradient applied the file policy before admitting this.
                 return navigation_gate.replace(false);
             }
             let allowed = crate::model::allowed_navigation(&url);
@@ -641,7 +641,7 @@ impl Drop for NativeHost {
 }
 
 /// One-shot permission for the next `file:` decision Wry's navigation handler
-/// sees. Only Browser sets it: on macOS, `Protection` after applying the file
+/// sees. Only Gradient sets it: on macOS, `Protection` after applying the file
 /// policy; elsewhere, `Page::load_file`. A web page can never set it.
 type FileGate = Rc<Cell<bool>>;
 
@@ -749,7 +749,7 @@ impl Page {
 
     /// WebKit refuses a plain `loadRequest:` of a file URL, so local files
     /// load with read access to their own folder (relative assets work), never
-    /// the whole disk. The navigation is marked as Browser's own.
+    /// the whole disk. The navigation is marked as Gradient's own.
     fn load_file(&self, url: &str) -> anyhow::Result<()> {
         use anyhow::Context;
         let path = crate::model::file_path(url).context("That file address is not valid.")?;
@@ -1602,7 +1602,7 @@ pub fn clear_website_data(profile: [u8; 16], events: Sender<Event>) {
     let _ = (profile, events);
 }
 
-/// Whether Browser opens web links from other apps: `None` when it can't
+/// Whether Gradient opens web links from other apps: `None` when it can't
 /// tell or can't be chosen (a bare binary rather than the app bundle).
 pub fn is_default_browser() -> Option<bool> {
     #[cfg(target_os = "macos")]
@@ -1621,7 +1621,7 @@ pub fn is_default_browser() -> Option<bool> {
     None
 }
 
-/// Asks macOS to make Browser the default for web links. macOS confirms
+/// Asks macOS to make Gradient the default for web links. macOS confirms
 /// with the user first; the answer arrives as `Changed` (or a notice).
 pub fn make_default_browser(events: Sender<Event>) {
     #[cfg(target_os = "macos")]
@@ -1675,8 +1675,8 @@ fn data_store(
 /// The page's WebKit configuration. Wry skips its own data-store setup when
 /// given one, so this applies the same rules: an ephemeral store for private
 /// tabs, the profile's persistent store otherwise. On top of that:
-/// - Safari's user-agent suffix, so sites stop treating Browser as an unknown
-///   (Gmail warned it was "no longer supported") and Browser blends in with
+/// - Safari's user-agent suffix, so sites stop treating Gradient as an unknown
+///   (Gmail warned it was "no longer supported") and Gradient blends in with
 ///   every Safari user instead of standing out;
 /// - WebKit's page-top color sampling (SPI, Safari's own settings), which
 ///   reports the color actually visible at the top of the page. Gmail paints
@@ -1684,7 +1684,7 @@ fn data_store(
 /// - element fullscreen (`requestFullscreen`, video players' fullscreen
 ///   buttons). WebKit moves the page into a fullscreen window of its own and
 ///   back into its host on exit; Wry turns this on too, but the page's
-///   configuration is Browser's to state;
+///   configuration is Gradient's to state;
 /// - the Space's web extension controller (see `extensions.rs`).
 #[cfg(target_os = "macos")]
 fn page_configuration(
@@ -1961,7 +1961,7 @@ mod linux {
                     xlib.visual_id = handle.visual_id.map_or(0, |v| v.get().into());
                     Ok(Self(xlib))
                 }
-                _ => anyhow::bail!("Browser requires X11 or XWayland on Linux."),
+                _ => anyhow::bail!("Gradient requires X11 or XWayland on Linux."),
             }
         }
     }
@@ -2067,7 +2067,7 @@ pub fn page_undo(redo: bool) -> bool {
     }
 }
 
-/// Browser ▸ About Browser: the standard panel, named and versioned from
+/// Gradient ▸ About Gradient: the standard panel, named and versioned from
 /// the app bundle.
 pub fn show_about() {
     #[cfg(target_os = "macos")]

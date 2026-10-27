@@ -91,7 +91,7 @@ int main(int argc, const char **argv) {
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
         NSURL *page = [NSURL URLWithString:@(argv[1])];
         double seconds = atof(argv[2]);
-        // Extension pages and workers identify as Safari, like Browser's pages.
+        // Extension pages and workers identify as Safari, like Gradient's pages.
         NSString *safari = @"Version/26.6 Safari/605.1.15";
         WKWebExtensionControllerConfiguration *controllerConfiguration = [WKWebExtensionControllerConfiguration nonPersistentConfiguration];
         WKWebViewConfiguration *extensionPages = [WKWebViewConfiguration new];

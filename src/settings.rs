@@ -1,5 +1,5 @@
 //! App-wide preferences in `settings.json`, chosen in Settings (and the
-//! Browser menu). A missing or unreadable file means the defaults; the next
+//! Gradient menu). A missing or unreadable file means the defaults; the next
 //! change replaces it.
 use crate::model::SearchEngine;
 use anyhow::Result;

@@ -1,13 +1,13 @@
 // Native WebKit and LaunchServices checks for app-link handoff (mailto:, tel:…).
 // Run from the repo root: swift scripts/check-app-links.swift
 //
-// Browser decides app links in its navigation delegate from the frame WebKit
+// Gradient decides app links in its navigation delegate from the frame WebKit
 // reports (src/engine/protection.rs `handoff`, unit-tested in Rust). This
 // checks the WebKit facts that policy relies on: main-frame script redirects
 // and link clicks arrive with a main target frame, embedded frames with a
 // subframe target, and `target=_blank` links with no target frame but the
 // clicking frame as source. Every app link is cancelled, so the page stays put.
-// It also checks the macOS handler lookup Browser uses. No app is opened.
+// It also checks the macOS handler lookup Gradient uses. No app is opened.
 import AppKit
 import WebKit
 

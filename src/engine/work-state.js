@@ -1,4 +1,4 @@
-// Runs only in Browser's isolated WKContentWorld. No IPC handler, network,
+// Runs only in Gradient's isolated WKContentWorld. No IPC handler, network,
 // timers, or field values leave this realm. Native code asks for a small report.
 //
 // Only work the user produced counts. Pages routinely set field values,

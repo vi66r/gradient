@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--binary', default='dist/Browser.app/Contents/MacOS/browser')
+parser.add_argument('--binary', default='dist/Gradient.app/Contents/MacOS/gradient')
 parser.add_argument('--seconds', type=float, default=10)
 args = parser.parse_args()
 if args.seconds < 3:
@@ -30,7 +30,7 @@ with socket.socket() as unavailable, tempfile.TemporaryDirectory(prefix='browser
     url = f'http://127.0.0.1:{address[1]}/gpu'
     with tempfile.TemporaryFile(mode='w+') as log:
         process = subprocess.Popen([str(Path(args.binary).resolve()), url],
-                                   env={**os.environ, 'BROWSER_DATA_DIR': profile, 'RUST_BACKTRACE': '1'},
+                                   env={**os.environ, 'GRADIENT_DATA_DIR': profile, 'RUST_BACKTRACE': '1'},
                                    stdout=log, stderr=log)
         try:
             try:

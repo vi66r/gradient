@@ -4,7 +4,7 @@
 //! hears about playback without polling, and `_setPageMuted:` silences the
 //! whole page, Web Audio and cross-origin frames included.
 //!
-//! Chosen over public-API workarounds (Rafi, 2026-10-22): Browser isn't App
+//! Chosen over public-API workarounds (Rafi, 2026-10-22): Gradient isn't App
 //! Store bound and is meant to be open source. Every selector is checked with
 //! `respondsToSelector:` first, so if WebKit drops one the controls go away
 //! instead of crashing.
@@ -191,7 +191,7 @@ impl Media {
         };
         // Isolated from the page's globals, but sharing its DOM and session.
         let world =
-            unsafe { WKContentWorld::worldWithName(&NSString::from_str("Browser Media"), mtm) };
+            unsafe { WKContentWorld::worldWithName(&NSString::from_str("Gradient Media"), mtm) };
         unsafe {
             self.view
                 .evaluateJavaScript_inFrame_inContentWorld_completionHandler(

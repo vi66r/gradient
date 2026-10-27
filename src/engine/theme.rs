@@ -4,7 +4,7 @@
 //!
 //! In order of preference, all key-value observable so the color follows live
 //! (new pages, SPAs switching themes) without scripts or polling:
-//! 0. Browser's own sample: a tiny snapshot of the page's top edge, taken after
+//! 0. Gradient's own sample: a tiny snapshot of the page's top edge, taken after
 //!    each load and again over the next few seconds. WebKit samples only at
 //!    first paint, so apps with a splash screen (Gmail's white "Loading")
 //!    would otherwise keep the splash's color. Four small captures per load,
@@ -30,7 +30,7 @@ use objc2_foundation::{NSError, NSNumber, NSPoint, NSRect, NSSize, NSString};
 use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
 use std::{cell::Cell, ffi::c_void};
 
-/// Height of the page edge Browser samples, in points.
+/// Height of the page edge Gradient samples, in points.
 const EDGE: f64 = 8.;
 
 const OBSERVED: [&str; 3] = [
@@ -43,7 +43,7 @@ struct Ivars {
     id: u64,
     events: Sender<Event>,
     view: Weak<WKWebView>,
-    /// Browser's latest top-edge sample, cleared for each new document.
+    /// Gradient's latest top-edge sample, cleared for each new document.
     sampled: Cell<Option<u32>>,
 }
 

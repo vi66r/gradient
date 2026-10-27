@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Browser probe",
+  "name": "Gradient probe",
   "version": "1.0",
   "permissions": [
     "declarativeNetRequest",
@@ -32,9 +32,9 @@
       }
     ]
   },
-  "description": "Checks content scripts, messaging, tabs, the toolbar action, popups, permission prompts and declarativeNetRequest in Browser.",
+  "description": "Checks content scripts, messaging, tabs, the toolbar action, popups, permission prompts and declarativeNetRequest in Gradient.",
   "action": {
-    "default_title": "Browser probe",
+    "default_title": "Gradient probe",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icon.png",

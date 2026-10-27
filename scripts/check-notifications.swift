@@ -1,7 +1,7 @@
 // Native WebKit checks for web notifications.
 // Run from the repo root: swift scripts/check-notifications.swift
 //
-// Browser shows a page's notifications through WebKit's notification-provider
+// Gradient shows a page's notifications through WebKit's notification-provider
 // C SPI, resolved at runtime (src/engine/notifications.rs). This drives the
 // same symbols against the fixture (fixtures/notify.html):
 // - a persistent store asks the UI delegate's SPI and honors its answer;
@@ -120,7 +120,7 @@ provider.initialize(to: Provider(version: 0, info: nil,
     }
     func manager(_ view: WKWebView) -> Ref { contextManager(pageContext(pageRef(view))) }
 
-    /// A page in its own configuration (and so its own pool), as Browser makes them.
+    /// A page in its own configuration (and so its own pool), as Gradient makes them.
     func open(_ url: String, store: WKWebsiteDataStore) async -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = store
@@ -189,7 +189,7 @@ provider.initialize(to: Provider(version: 0, info: nil,
         _ = try? await page.evaluateJavaScript("notify('Left open'), 1")
         await wait(until: { shown.count == 2 }, "second show")
         let leftOpen = shown[1].id
-        // What a WKWebView's dealloc does when Browser drops a tab's page.
+        // What a WKWebView's dealloc does when Gradient drops a tab's page.
         let close = NSSelectorFromString("_close")
         guard page.responds(to: close) else { fail("no _close") }
         page.perform(close)

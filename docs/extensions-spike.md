@@ -2,30 +2,30 @@
 
 The real implementation that followed is described in docs/extensions.md.
 
-Question: can Browser run real web extensions through WebKit's public
+Question: can Gradient run real web extensions through WebKit's public
 `WKWebExtension` API (macOS 15.4+), and does that solve content blocking and
 password managers? Tested on macOS 26.6.2 with a standalone Objective-C harness
-(`scripts/extension-harness.m`) and in Browser itself behind
-`BROWSER_EXTENSIONS` (`src/engine/extensions.rs`, this branch only).
+(`scripts/extension-harness.m`) and in Gradient itself behind
+`GRADIENT_EXTENSIONS` (`src/engine/extensions.rs`, this branch only).
 
 ## Verdict
 
 - **Content blocking: yes.** uBlock Origin Lite (MV3) blocks ads and trackers
-  in Browser's own pages, after one manifest workaround (below). Recommended
+  in Gradient's own pages, after one manifest workaround (below). Recommended
   over hand-rolling `WKContentRuleList` blocking.
 - **Passwords: not yet, and the path is clear.** 1Password's Safari extension
-  loads and runs, but it is inert until Browser relays its native messages to
+  loads and runs, but it is inert until Gradient relays its native messages to
   the extension's app-side handler, as Safari does. That relay is the main
   piece of work for passwords. Bitwarden's Chrome build gets further after a
   user-agent fix but its popup never finishes loading.
-- The API is broad enough for a real extension system. Browser has to supply
+- The API is broad enough for a real extension system. Gradient has to supply
   a tab and window model, popups, permission prompts and an install UI.
 
 ## What works
 
 | Check | Result |
 |---|---|
-| Load an unpacked MV3 extension, grant permissions, attach the controller to a page configuration | Works (harness and Browser) |
+| Load an unpacked MV3 extension, grant permissions, attach the controller to a page configuration | Works (harness and Gradient) |
 | Content script on page load | Runs |
 | `declarativeNetRequest` static rules | Block as declared |
 | Content script → background `runtime.sendMessage` | Fails with "Tab not found" until the app describes tabs and windows (`WKWebExtensionTab`/`Window`, `didOpenTab`, `didOpenWindow`, `didFocusWindow`, controller delegate `openWindows`/`focusedWindow`). With a minimal model the reply arrives with `sender.tab.id`. |
@@ -48,7 +48,7 @@ password managers? Tested on macOS 26.6.2 with a standalone Objective-C harness
   at install. Block rules don't need host access; only redirect rules do, so
   uBOL's surrogate-script redirects are lost. With that, the full extension
   (background included) blocked AdSense and Google Analytics in the harness
-  and in Browser.
+  and in Gradient.
 - The first launch compiles ~170k rules in the background; a page opened in
   the first ~15 s isn't filtered yet. A persistent controller
   (`WKWebExtensionControllerConfiguration configurationWithIdentifier:`)
@@ -76,7 +76,7 @@ password managers? Tested on macOS 26.6.2 with a standalone Objective-C harness
 - Background crashed at startup: Bitwarden picks its code paths by
   `navigator.userAgent`, and extension pages get WebKit's default agent
   without ` Safari/`. Fixed by giving extension pages Safari's agent through
-  `WKWebExtensionControllerConfiguration.webViewConfiguration` (Browser's
+  `WKWebExtensionControllerConfiguration.webViewConfiguration` (Gradient's
   pages already send it).
 - After that the background runs, but the popup page never finishes loading.
   Not chased further. Bitwarden's Safari build ships inside its Mac App Store
@@ -87,7 +87,7 @@ password managers? Tested on macOS 26.6.2 with a standalone Objective-C harness
 1. One persistent controller per Space (`configurationWithIdentifier:` with
    the Space ID; the Private Space non-persistent), extension pages sending
    Safari's user agent.
-2. A tab and window model over `Browser::tabs` / `spaces` (needed for any
+2. A tab and window model over `Gradient::tabs` / `spaces` (needed for any
    messaging), with `didOpenTab`/`didActivateTab`/`didCloseTab` calls from the
    shell.
 3. Toolbar actions in the control strip, with popups in a popover.
@@ -112,5 +112,5 @@ python3 -m http.server 8773 --bind 127.0.0.1 --directory fixtures/extensions/sit
 HARNESS_WARMUP=12 /tmp/extension-harness http://127.0.0.1:8773/ads.html 4 path/to/uBOL
 ```
 
-In Browser: Tools ▸ Add Extension… (the spike's `BROWSER_EXTENSIONS` variable
+In Gradient: Tools ▸ Add Extension… (the spike's `GRADIENT_EXTENSIONS` variable
 is gone).

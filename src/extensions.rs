@@ -1,6 +1,6 @@
 //! Installed web extensions, per Space. Each saved Space keeps its own list,
 //! as it keeps its own website data; adding an extension copies it into
-//! Browser's data folder (`extensions/<install ID>/`), so the original can
+//! Gradient's data folder (`extensions/<install ID>/`), so the original can
 //! move or go. The Private Space runs only the extensions the user allowed
 //! there, from any Space, with storage that is forgotten when it closes.
 //! The engine side (controllers, tabs, toolbar actions) is
@@ -244,7 +244,7 @@ impl Store {
     }
 }
 
-/// An extension copied into Browser's data folder, not yet added.
+/// An extension copied into Gradient's data folder, not yet added.
 #[derive(Debug)]
 pub(crate) struct Staged {
     pub id: String,
@@ -663,7 +663,7 @@ impl Browser {
         engine::perform_extension_action(self.current_space().id, install, tab, anchor);
     }
 
-    /// Browser ▸ Add Extension…: an unpacked extension's folder or a `.zip`.
+    /// Gradient ▸ Add Extension…: an unpacked extension's folder or a `.zip`.
     pub(crate) fn add_extension(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !engine::extensions_available() {
             self.notice = Some("Extensions need macOS 15.4 or later.".into());

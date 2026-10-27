@@ -22,7 +22,7 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     bundle = args.bundle.resolve()
-    binary = bundle / 'Contents/MacOS/browser'
+    binary = bundle / 'Contents/MacOS/gradient'
     helper = args.output / 'perf-processes'
     subprocess.run(['clang','-O2','-Wall','-Wextra',str(ROOT/'scripts/perf-processes.c'),'-o',str(helper)],check=True)
     visibility = args.output / 'window-visibility'
@@ -39,7 +39,7 @@ def main():
                 if workload == 'restore20':
                     Path(profile,'session.json').write_text(json.dumps({'version':1,'active':0,'tabs':[
                         {'title':f'Fixture {i}', 'url':url if i==0 else f'http://127.0.0.1:{args.port}/?tab={i}'} for i in range(20)]}))
-                cmd = ['open','-n',str(bundle),'--env',f'BROWSER_DATA_DIR={profile}', '--stdout',str(args.output/f'{run}.log'), '--stderr',str(args.output/f'{run}.log')]
+                cmd = ['open','-n',str(bundle),'--env',f'GRADIENT_DATA_DIR={profile}', '--stdout',str(args.output/f'{run}.log'), '--stderr',str(args.output/f'{run}.log')]
                 if workload not in ['blank','restore20']: cmd += ['--args',url]
                 launched = time.monotonic()
                 subprocess.run(cmd,check=True)

@@ -1,7 +1,7 @@
 // Native WebKit checks for popups and site permissions.
 // Run from the repo root: swift scripts/check-popups-permissions.swift
 //
-// Browser's UI delegate (src/engine/site.rs) builds popups from the
+// Gradient's UI delegate (src/engine/site.rs) builds popups from the
 // configuration WebKit hands it and asks the user before a site uses a
 // device. This checks the WebKit behavior that relies on, against the real
 // fixtures (fixtures/sites.html) with real AppKit clicks: a popup built that
@@ -60,7 +60,7 @@ struct Request { let kind: String; let origin: String; let main: Bool; let frame
     var count = 0
 
     func start() {
-        // As Browser's `page_configuration`, with an ephemeral store like a
+        // As Gradient's `page_configuration`, with an ephemeral store like a
         // private tab so the popup's shared store is visible.
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -152,7 +152,7 @@ struct Request { let kind: String; let origin: String; let main: Bool; let frame
             try await click("finish", in: popup)
             try await wait(until: { self.closed == 1 }, "webViewDidClose")
             pass("window.close() reaches webViewDidClose:")
-            // As Browser does when the tab closes: drop the view.
+            // As Gradient does when the tab closes: drop the view.
             popupWindow?.contentView = nil
             popupWindow?.close()
             popup = nil

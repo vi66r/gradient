@@ -1,7 +1,7 @@
 //! Web notifications. WebKit hands a page's `new Notification(…)` to its
 //! process pool's notification provider, a C SPI that Safari uses, resolved
 //! here at runtime: if WebKit drops a symbol, notifications stay denied.
-//! Browser shows them through Notification Center; a click fires the page's
+//! Gradient shows them through Notification Center; a click fires the page's
 //! `onclick` and brings its tab to the front. Ephemeral (private) stores deny
 //! notifications inside WebKit, so they never get here.
 use crate::engine::Event;
@@ -331,7 +331,7 @@ fn authorize() {
         const ALERT_AND_SOUND: NSUInteger = (1 << 2) | (1 << 1);
         let done = RcBlock::new(|granted: objc2::runtime::Bool, _error: *mut NSError| {
             if !granted.as_bool() {
-                log::warn!("macOS notifications are turned off for Browser");
+                log::warn!("macOS notifications are turned off for Gradient");
             }
         });
         let _: () = unsafe {
@@ -510,7 +510,7 @@ define_class!(
     struct Clicks;
     unsafe impl NSObjectProtocol for Clicks {}
     impl Clicks {
-        // Show banners even while Browser is frontmost: the tab that
+        // Show banners even while Gradient is frontmost: the tab that
         // notified is usually not the one in view.
         #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
         fn present(&self, _center: &AnyObject, _notification: &AnyObject, handler: &Block<dyn Fn(NSUInteger)>) {

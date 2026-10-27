@@ -740,35 +740,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "browser"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-channel",
- "block2 0.6.2",
- "chrono",
- "env_logger",
- "fs2",
- "futures-lite",
- "gpui-kit",
- "gtk",
- "image",
- "log",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "objc2-quartz-core 0.3.2",
- "objc2-web-kit",
- "serde",
- "serde_json",
- "tempfile",
- "ureq",
- "url",
- "uuid",
- "wry",
-]
-
-[[package]]
 name = "bstr"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3152,6 +3123,35 @@ name = "gpui-pre-ztracing-macro"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b0d73e1bc02eef886a5947f41b8512708792e9e5d3053d181843311a487f96f"
+
+[[package]]
+name = "gradient"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "block2 0.6.2",
+ "chrono",
+ "env_logger",
+ "fs2",
+ "futures-lite",
+ "gpui-kit",
+ "gtk",
+ "image",
+ "log",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
+ "objc2-web-kit",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
+ "url",
+ "uuid",
+ "wry",
+]
 
 [[package]]
 name = "granit-parser"

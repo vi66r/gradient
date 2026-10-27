@@ -1,4 +1,4 @@
-// macOS-only diagnostic helper; never linked into Browser.
+// macOS-only diagnostic helper; never linked into Gradient.
 // Prints the fraction of PID's largest on-screen window that is not covered by
 // windows above it. GPUI parks its display link for occluded windows, so idle
 // measurements are only meaningful while the window is actually visible.

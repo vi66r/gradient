@@ -511,14 +511,14 @@ impl Browser {
         }
         #[cfg(debug_assertions)]
         cx.defer_in(window, |this, window, cx| {
-            match std::env::var("BROWSER_TEST_TOOL").as_deref() {
+            match std::env::var("GRADIENT_TEST_TOOL").as_deref() {
                 Ok("history") => this.show_tool(Tool::History, window, cx),
                 Ok("settings") => this.show_tool(Tool::Settings, window, cx),
                 _ => {}
             }
             // Types into the address field as a person would, once its
             // focus has settled.
-            if let Ok(text) = std::env::var("BROWSER_TEST_TYPE") {
+            if let Ok(text) = std::env::var("GRADIENT_TEST_TYPE") {
                 this.focus_address(window, cx);
                 cx.spawn_in(window, async move |this, cx| {
                     cx.background_executor()
@@ -535,7 +535,7 @@ impl Browser {
             }
             // "out" pops the front tab into an app window after it loads;
             // "return" also brings it back three seconds later.
-            if let Ok(step) = std::env::var("BROWSER_TEST_APP") {
+            if let Ok(step) = std::env::var("GRADIENT_TEST_APP") {
                 cx.spawn_in(window, async move |this, cx| {
                     let pause = Duration::from_secs(3);
                     cx.background_executor().timer(pause).await;
@@ -553,7 +553,7 @@ impl Browser {
                 .detach();
             }
             // Rests the pointer at "x,y" (window points), as for a tooltip.
-            if let Ok(at) = std::env::var("BROWSER_TEST_HOVER")
+            if let Ok(at) = std::env::var("GRADIENT_TEST_HOVER")
                 && let Some((x, y)) = at.split_once(',')
                 && let (Ok(x), Ok(y)) = (x.parse::<f32>(), y.parse::<f32>())
             {
@@ -641,9 +641,9 @@ impl Browser {
     }
 
     fn follow_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // BROWSER_APPEARANCE=light|dark pins the window's appearance for
+        // GRADIENT_APPEARANCE=light|dark pins the window's appearance for
         // visual checks without touching the system setting.
-        let pinned = match std::env::var("BROWSER_APPEARANCE").as_deref() {
+        let pinned = match std::env::var("GRADIENT_APPEARANCE").as_deref() {
             Ok("light") => Some(false),
             Ok("dark") => Some(true),
             _ => None,
@@ -1219,7 +1219,7 @@ impl Browser {
             .collect();
         self.open_files(urls, private, window, cx);
         if !folders.is_empty() {
-            self.notice = Some("Browser can’t show folders. Open a file instead.".into());
+            self.notice = Some("Gradient can’t show folders. Open a file instead.".into());
         }
         cx.notify();
     }
@@ -1758,7 +1758,7 @@ impl Browser {
                 };
                 self.discard_pending = true;
                 let detail = format!(
-                    "{host} has edits you haven’t saved, or you were working in content Browser can’t check. Leaving may discard them."
+                    "{host} has edits you haven’t saved, or you were working in content Gradient can’t check. Leaving may discard them."
                 );
                 let answer = self.prompt_in(
                     Some(id),
@@ -2629,7 +2629,7 @@ fn main() -> anyhow::Result<()> {
                 ))),
                 window_min_size: Some(size(px(880.), px(600.))),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Browser".into()),
+                    title: Some("Gradient".into()),
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(16.), px(16.))),
                 }),
@@ -2673,7 +2673,7 @@ fn main() -> anyhow::Result<()> {
             while let Ok(urls) = urls_receive.recv().await {
                 let _ = handle.update(cx, |_, window, cx| {
                     let _ = urls_view.update(cx, |this, cx| {
-                        // Web links, or files opened with Browser from Finder.
+                        // Web links, or files opened with Gradient from Finder.
                         for url in urls {
                             if mcp::origin(&url).is_some() || model::is_file_url(&url) {
                                 this.new_tab(url, false, window, cx);

@@ -87,7 +87,7 @@ define_class!(
                         handler.call((std::ptr::null_mut(),));
                         let _ = events.try_send(Event::Notice(
                             if error.kind() == std::io::ErrorKind::PermissionDenied {
-                                "The download couldn’t start: Browser can’t use your Downloads folder. Allow it in System Settings ▸ Privacy & Security ▸ Files & Folders."
+                                "The download couldn’t start: Gradient can’t use your Downloads folder. Allow it in System Settings ▸ Privacy & Security ▸ Files & Folders."
                             } else {
                                 "The download couldn’t start: the Downloads folder isn’t available."
                             }

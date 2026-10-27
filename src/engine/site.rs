@@ -1,4 +1,4 @@
-//! The page's WebKit UI delegate, in front of Wry's: opens popups as Browser
+//! The page's WebKit UI delegate, in front of Wry's: opens popups as Gradient
 //! pages, closes them when they ask, and asks the user before a site uses the
 //! camera, microphone, screen or location, or sends notifications. Wry's own handlers answer
 //! synchronously and can't see the frame, so they can't prompt.

@@ -252,7 +252,7 @@ impl Browser {
         let (private, name, id) = (space.private, space.name.clone(), space.id);
         let header = self.tool_header(
             "Settings",
-            format!("Browser {}", env!("CARGO_PKG_VERSION")),
+            format!("Gradient {}", env!("CARGO_PKG_VERSION")),
             Vec::new(),
             p,
             cx,
@@ -316,7 +316,7 @@ impl Browser {
                 .text_size(px(12.))
                 .text_color(rgb(p.muted))
                 .child(Icon::new(IconName::Check).size_3p5())
-                .child("Browser is your default")
+                .child("Gradient is your default")
                 .into_any_element(),
             Some(false) => pill_button("make-default", "Make Default", IconName::Globe, p)
                 .on_click(
@@ -331,7 +331,7 @@ impl Browser {
         };
         setting_row(
             "Default browser",
-            Some("Links from other apps open in Browser.".into()),
+            Some("Links from other apps open in Gradient.".into()),
             control,
             p,
         )

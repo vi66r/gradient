@@ -1,6 +1,6 @@
 # Web extensions
 
-Browser runs Safari-style web extensions through WebKit's public
+Gradient runs Safari-style web extensions through WebKit's public
 `WKWebExtension` API (macOS 15.4+). This builds on the spike
 (docs/extensions-spike.md). Code: `src/engine/extensions.rs` (WebKit side) and
 `src/extensions.rs` (installs, menus, prompts).
@@ -16,7 +16,7 @@ Browser runs Safari-style web extensions through WebKit's public
 - Every page in a Space joins its controller, including Spaces with no
   extensions. A WKWebView's configuration can't change after creation, so an
   extension added later couldn't reach pages that were already open.
-- Extension pages and workers send Safari's user agent, as Browser's pages
+- Extension pages and workers send Safari's user agent, as Gradient's pages
   do. Extensions choose code paths by user agent; Bitwarden's background
   crashed without it.
 
@@ -44,7 +44,7 @@ the Space is on screen or parked. That window is always the focused one,
 because it is the only window those extensions know.
 
 - WebKit asks about tabs synchronously, sometimes in the middle of the calls
-  Browser makes to it. So the model lives in the engine and never reaches into
+  Gradient makes to it. So the model lives in the engine and never reaches into
   the shell. Every render, the shell describes each Space's tabs (ID, page,
   title, address, loading). The engine diffs that against its model and calls
   `didOpenTab`, `didCloseTab`, `didActivateTab` and `didChangeTabProperties`.
@@ -71,13 +71,13 @@ pages unless the manifest exposes them (WebKit enforces
 ## Installing
 
 - Tools ▸ Add Extension… accepts an unpacked extension's folder or a `.zip`.
-  Browser copies it into its data folder (`extensions/<install ID>/`), so the
+  Gradient copies it into its data folder (`extensions/<install ID>/`), so the
   original can move or go.
   - Copying skips symbolic links.
   - Archives are checked for entries that would land outside the folder
     before `ditto` unpacks them, and any links in them are removed.
   - Both are capped at 20,000 files and 512 MB.
-- Browser reads the extension the way WebKit will, then asks: "Add “uBlock
+- Gradient reads the extension the way WebKit will, then asks: "Add “uBlock
   Origin Lite” to “Personal”?" The sheet lists what it will be able to do, in
   plain words ("Read and change everything on every website you visit",
   "Block content on any page"), and Cancel is the default. Cancel deletes the
@@ -88,7 +88,7 @@ pages unless the manifest exposes them (WebKit enforces
   applied before an extension starts.
 - **uBlock Origin Lite workaround.** WebKit ignores an extension's blocking
   rules when it has `declarativeNetRequestWithHostAccess` together with a
-  toolbar action. So at install, Browser removes that permission from any
+  toolbar action. So at install, Gradient removes that permission from any
   manifest that requests it. Plain `declarativeNetRequest` is added if it is
   missing, and the change is logged. Block rules keep working; redirect rules
   (uBOL's surrogate scripts) no longer apply. This should be filed with WebKit.
@@ -119,7 +119,7 @@ pages unless the manifest exposes them (WebKit enforces
 Requests made after install (`permissions.request`, access to more sites) are
 answered by the shell. Requests that touch nothing of the user's (storage,
 alarms, `activeTab`) are granted without asking, as in Chrome. Anything else
-gets one sheet in the shell's style, "Allow “Browser probe” to change what
+gets one sheet in the shell's style, "Allow “Gradient probe” to change what
 you copy?", with Don't Allow as the default.
 
 - Only the Space on screen asks, and never over another dialog. Anything
@@ -136,8 +136,8 @@ fills this in. Until a relay is set, extensions are told that no app answers.
 ## Known WebKit behavior
 
 - WebKit stops the app on a failed assertion if it reads an extension from a
-  relative file URL. Browser always passes absolute paths, which matters with
-  a relative `BROWSER_DATA_DIR`. The spike harness needs absolute paths too.
+  relative file URL. Gradient always passes absolute paths, which matters with
+  a relative `GRADIENT_DATA_DIR`. The spike harness needs absolute paths too.
 - After an extension is added, a large rule set takes a few seconds to
   compile: about 8 s for uBOL's 170k rules on this Mac. Pages opened before
   then aren't filtered. With the persistent controller, the first page after
