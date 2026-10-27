@@ -514,6 +514,30 @@ impl Browser {
                 })
                 .detach();
             }
+            // Rests the pointer at "x,y" (window points), as for a tooltip.
+            if let Ok(at) = std::env::var("BROWSER_TEST_HOVER")
+                && let Some((x, y)) = at.split_once(',')
+                && let (Ok(x), Ok(y)) = (x.parse::<f32>(), y.parse::<f32>())
+            {
+                cx.spawn_in(window, async move |_, cx| {
+                    for step in 0..4 {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(300))
+                            .await;
+                        let _ = cx.update(|window, cx| {
+                            window.dispatch_event(
+                                PlatformInput::MouseMove(MouseMoveEvent {
+                                    position: point(px(x - 3. + step as f32), px(y)),
+                                    pressed_button: None,
+                                    modifiers: Modifiers::default(),
+                                }),
+                                cx,
+                            )
+                        });
+                    }
+                })
+                .detach();
+            }
         });
         // Restored tabs show cached icons before (or without) loading.
         for tab in this.tabs.iter().filter(|tab| !tab.private) {

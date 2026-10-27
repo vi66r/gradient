@@ -290,7 +290,7 @@ impl Browser {
                 .cursor_pointer()
                 .text_color(rgb(p.muted))
                 .hover(|s| s.bg(rgb(p.selected)).text_color(rgb(p.ink)))
-                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .tooltip(placed(move || Tooltip::new(tip.clone())))
                 .child(Icon::new(icon).size_3())
         };
         let actions = div()
@@ -506,7 +506,7 @@ impl Browser {
                 })
                 .when_some(tip, |chip, tip| {
                     let tip: SharedString = tip.into();
-                    chip.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                    chip.tooltip(placed(move || Tooltip::new(tip.clone())))
                 })
                 .child(mark)
                 .when(!dot_only, |chip| chip.child(label))
@@ -569,7 +569,7 @@ impl Browser {
                         .cursor_pointer()
                         .text_color(rgb(p.muted))
                         .hover(move |s| s.bg(rgba(wash)).text_color(rgb(p.ink)))
-                        .tooltip(|window, cx| Tooltip::new("New Space").build(window, cx))
+                        .tooltip(placed(|| Tooltip::new("New Space")))
                         .child(Icon::new(IconName::Plus).size_3p5())
                         .on_click(cx.listener(|this, _, window, cx| this.new_space(window, cx))),
                 )
@@ -795,14 +795,13 @@ impl Browser {
                         .rounded(px(R_CONTROL - 4.))
                         .text_color(rgb(agent_color(p, self.dark, trusted)))
                         .hover(|s| s.bg(rgb(p.hover)))
-                        .tooltip(move |window, cx| {
+                        .tooltip(placed(move || {
                             Tooltip::new(if trusted {
                                 "Trusted for agents: full access. Click to stop trusting."
                             } else {
                                 "Shared with agents. Click to stop sharing."
                             })
-                            .build(window, cx)
-                        })
+                        }))
                         .child(Icon::new(IconName::Bot).size_3p5())
                         .on_click(cx.listener(move |this, _, w, cx| {
                             cx.stop_propagation();
@@ -1571,11 +1570,9 @@ impl Browser {
                         .opacity(0.72)
                         .hover(move |s| s.bg(rgba(wash)).opacity(1.))
                         .active(|s| s.opacity(0.55))
-                        .tooltip(|window, cx| {
-                            Tooltip::new("Actual size")
-                                .action(&ActualSize, None)
-                                .build(window, cx)
-                        })
+                        .tooltip(placed(|| {
+                            Tooltip::new("Actual size").action(&ActualSize, None)
+                        }))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(|this, _, _, cx| this.zoom_by(None, cx)))
                         .child(format!("{}%", (tab.zoom * 100.).round()))
@@ -1693,7 +1690,7 @@ impl Browser {
                     .items_center()
                     .justify_center()
                     .rounded(px(R_BUTTON))
-                    .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                    .tooltip(placed(move || Tooltip::new(tip.clone())))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_mouse_down(
                         MouseButton::Right,
@@ -2322,7 +2319,7 @@ fn toolbar_control(
         .opacity(0.72)
         .hover(move |s| s.bg(rgba(wash)).opacity(1.))
         .active(|s| s.opacity(0.55))
-        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .tooltip(placed(move || Tooltip::new(tip.clone())))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(if size < 28. {
             icon.size_3p5()
@@ -2473,7 +2470,7 @@ fn icon_button(id: &'static str, title: &str, icon: IconName, p: Palette) -> Sta
         .text_color(rgb(p.muted))
         .hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
         .active(|s| s.opacity(0.7))
-        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .tooltip(placed(move || Tooltip::new(tip.clone())))
         .child(Icon::new(icon).size_4())
 }
 
@@ -2507,6 +2504,72 @@ fn label(text: &'static str, p: Palette) -> impl IntoElement {
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(p.muted))
         .child(text)
+}
+
+/// Builds a tooltip that keeps clear of the page card. The page is a native
+/// view above everything GPUI draws, and GPUI opens every tooltip below and
+/// right of the pointer, so near the card a tip opened underneath the page
+/// and was cut off. Tips in the sidebar now open toward its middle (and
+/// above the pointer in its Spaces row and footer); tips in the toolbar open beside the
+/// pointer, centered on the bar.
+pub(crate) fn placed(
+    tooltip: impl Fn() -> Tooltip + 'static,
+) -> impl Fn(&mut Window, &mut App) -> AnyView {
+    move |window, cx| {
+        let tip = tooltip().build(window, cx);
+        let (at, viewport) = (window.mouse_position(), window.viewport_size());
+        cx.new(|_| Placed { tip, at, viewport }).into()
+    }
+}
+
+/// A tooltip moved off GPUI's spot. GPUI lays it out at the pointer; this
+/// root takes no room, and the tip hangs off it on the chosen side, so its
+/// size needn't be known in advance. (`Tooltip` brings a 12 px margin.)
+struct Placed {
+    tip: AnyView,
+    at: Point<Pixels>,
+    viewport: Size<Pixels>,
+}
+
+impl Render for Placed {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let (x, y) = (f32::from(self.at.x), f32::from(self.at.y));
+        let (width, height) = (
+            f32::from(self.viewport.width),
+            f32::from(self.viewport.height),
+        );
+        let tip = div().absolute().whitespace_nowrap().child(self.tip.clone());
+        let tip = if x >= SIDEBAR && y < CONTROL_ZONE {
+            // The toolbar: beside the pointer, past the button it's on.
+            let middle = CONTROL_ZONE / 2. - y;
+            let tip = tip.top(px(middle - 30.)).h(px(60.)).flex().items_center();
+            if x > width / 2. {
+                tip.right(px(14.))
+            } else {
+                tip.left(px(14.))
+            }
+        } else {
+            let leftward = if x < SIDEBAR {
+                x > SIDEBAR / 2.
+            } else {
+                x > width - 240.
+            };
+            let tip = if leftward {
+                tip.right_0()
+            } else {
+                tip.left_0()
+            };
+            // The sidebar's Spaces row and footer: opening below would
+            // cover the buttons beneath.
+            let bottom = if x < SIDEBAR { 120. } else { 56. };
+            if y > height - bottom {
+                tip.bottom_0()
+            } else {
+                tip.top_0()
+            }
+        };
+        div().size_0().child(tip)
+    }
 }
 
 #[cfg(test)]
