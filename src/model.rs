@@ -362,6 +362,19 @@ pub struct SavedSpace {
     pub color: u8,
     pub tabs: Vec<SavedTab>,
     pub active: usize,
+    /// Pages open in their own app windows, which reopen with the Space.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub apps: Vec<SavedApp>,
+}
+
+/// A page in its own window: where it was and where the window sat.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedApp {
+    #[serde(flatten)]
+    pub tab: SavedTab,
+    /// Window origin and size in screen points: x, y, width, height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<[f32; 4]>,
 }
 
 impl SavedSpace {
@@ -374,6 +387,7 @@ impl SavedSpace {
             color: 0,
             tabs,
             active,
+            apps: Vec::new(),
         }
     }
 
@@ -442,7 +456,7 @@ impl Session {
         if self
             .spaces
             .iter()
-            .map(|space| space.tabs.len())
+            .map(|space| space.tabs.len() + space.apps.len())
             .sum::<usize>()
             > 1000
         {
@@ -456,7 +470,8 @@ impl Session {
             if space.name.chars().count() > SPACE_NAME_MAX || space.color >= SPACE_COLORS {
                 bail!("The session contains an invalid Space.");
             }
-            for tab in &space.tabs {
+            let apps = space.apps.iter().map(|app| &app.tab);
+            for tab in space.tabs.iter().chain(apps) {
                 if tab.url != START && !allowed_address(&tab.url) {
                     bail!("The session contains an unsupported address.");
                 }
@@ -680,6 +695,23 @@ mod tests {
         // Spaces round-trip as written.
         let saved = serde_json::to_vec(&session).unwrap();
         assert_eq!(Session::parse(&saved, [9; 16]).unwrap(), session);
+    }
+
+    #[test]
+    fn app_windows_round_trip_and_are_checked_like_tabs() {
+        let mut session = Session::fresh([7; 16]);
+        assert!(!serde_json::to_string(&session).unwrap().contains("apps"));
+        session.spaces[0].apps.push(SavedApp {
+            tab: SavedTab {
+                url: "https://mail.example/".into(),
+                title: "Mail".into(),
+            },
+            frame: Some([40., 60., 1000., 760.]),
+        });
+        let saved = serde_json::to_vec(&session).unwrap();
+        assert_eq!(Session::parse(&saved, [7; 16]).unwrap(), session);
+        session.spaces[0].apps[0].tab.url = "javascript:alert(1)".into();
+        assert!(session.validate().is_err());
     }
 
     #[test]

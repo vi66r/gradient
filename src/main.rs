@@ -1,5 +1,6 @@
 extern crate gpui_kit as gpui;
 mod agent;
+mod apps;
 mod assets;
 mod downloads;
 mod engine;
@@ -69,6 +70,8 @@ actions!(
         NextSpace,
         PreviousSpace,
         ClearHistory,
+        PopOut,
+        PopIn,
         Quit
     ]
 );
@@ -175,6 +178,8 @@ enum TabCommand {
     Close,
     CloseOthers,
     CloseBelow,
+    /// Open the tab's page in its own window.
+    PopOut,
     /// Reload the tab in another Space, named by its ID.
     MoveTo([u8; 16]),
 }
@@ -252,6 +257,8 @@ struct Browser {
     notice: Option<String>,
     copy_feedback: Option<CopyTarget>,
     copy_epoch: u64,
+    /// Pages in their own windows; see `apps.rs`.
+    apps: Vec<apps::AppPage>,
     /// What the menu bar shows now; see `menu_bar.rs`.
     menus: Option<menu_bar::MenuState>,
     /// The field was filled and selected ahead of its focus event.
@@ -398,6 +405,7 @@ impl Browser {
         })
         .detach();
         let restored = spaces::restore_session(saved);
+        let saved_apps = restored.apps;
         let profile = restored.spaces[restored.current].id;
         let active = restored.active;
         let ids = engine::Ids::new(std::cell::Cell::new(restored.next_id));
@@ -447,6 +455,7 @@ impl Browser {
             copy_feedback: None,
             copy_epoch: 0,
             menus: None,
+            apps: Vec::new(),
             address_primed: false,
             address_press: None,
             discard_pending: false,
@@ -458,7 +467,7 @@ impl Browser {
             request_headers,
             request_body,
             response,
-            response_summary: "Ready when you are".into(),
+            response_summary: "No response yet".into(),
             requesting: false,
             grant_epoch: 0,
             dark: false,
@@ -490,6 +499,12 @@ impl Browser {
         engine::install_backdrop(window);
         this.follow_appearance(window, cx);
         // For screenshots of debug builds only: open a tool at launch.
+        // App windows open once the browser window exists.
+        if !saved_apps.is_empty() {
+            cx.defer_in(window, move |this, window, cx| {
+                this.reopen_apps(saved_apps, window, cx)
+            });
+        }
         #[cfg(debug_assertions)]
         cx.defer_in(window, |this, window, cx| {
             match std::env::var("BROWSER_TEST_TOOL").as_deref() {
@@ -511,6 +526,25 @@ impl Browser {
                             input.replace_text_in_range(None, &text, window, cx)
                         });
                     });
+                })
+                .detach();
+            }
+            // "out" pops the front tab into an app window after it loads;
+            // "return" also brings it back three seconds later.
+            if let Ok(step) = std::env::var("BROWSER_TEST_APP") {
+                cx.spawn_in(window, async move |this, cx| {
+                    let pause = Duration::from_secs(3);
+                    cx.background_executor().timer(pause).await;
+                    let _ = this
+                        .update_in(cx, |this, window, cx| this.pop_out(this.active, window, cx));
+                    if step == "return" {
+                        cx.background_executor().timer(pause).await;
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            if let Some(id) = this.apps.first().map(|app| app.tab.id) {
+                                this.pop_in(id, window, cx);
+                            }
+                        });
+                    }
                 })
                 .detach();
             }
@@ -868,15 +902,26 @@ impl Browser {
         let Some(page) = engine::take_opened(id) else {
             return;
         };
-        let Some(index) = self.tabs.iter().position(|tab| tab.id == opener) else {
+        // A page in an app window opens its pages in the browser window,
+        // in the app's Space; a sign-in popup goes on top.
+        if self.app(opener).is_some() {
+            self.show_app_space(opener, window, cx);
+        }
+        let index = self.tabs.iter().position(|tab| tab.id == opener);
+        if index.is_none() && self.app(opener).is_none() {
             return;
-        };
+        }
         if self.tabs.len() >= 1000 {
             self.notice = Some("Tab limit reached.".into());
             return;
         }
-        let private = self.tabs[index].private;
-        let position = if popup { index } else { 0 };
+        let private = index.is_some_and(|index| self.tabs[index].private);
+        // Its view starts beside its opener's, which may be an app window.
+        page.adopt(window, true);
+        let position = match index {
+            Some(index) if popup => index,
+            _ => 0,
+        };
         page.set_backdrop(ui::page_color(None, self.dark));
         let mut tab = Tab::new(id, url, private);
         tab.page = Some(page);
@@ -900,11 +945,19 @@ impl Browser {
     /// opened or one with no history, so there is no draft check: the page
     /// decided. A popup's opener comes back to the front.
     fn page_closed(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.app(id).is_some() {
+            self.close_app_unchecked(id, cx);
+            return;
+        }
         let Some(index) = self.tabs.iter().position(|tab| tab.id == id) else {
             return;
         };
         let active = index == self.active;
         let tab = self.tabs.remove(index);
+        // A sign-in popup an app window opened hands the front back to it.
+        if let Some(opener) = tab.opener.filter(|opener| self.app(*opener).is_some()) {
+            self.show_app(opener, cx);
+        }
         if self.tabs.is_empty() {
             self.new_tab(START.into(), false, window, cx);
         } else if active {
@@ -933,17 +986,20 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(index) = self.tabs.iter().position(|tab| tab.id == id) else {
-            return;
+        // The front tab asks, and so does a page in its own window.
+        let index = self.tabs.iter().position(|tab| tab.id == id);
+        let front = index == Some(self.active) && self.tool.is_none();
+        let (tab, profile) = match (index, self.app(id)) {
+            (Some(index), _) => (&self.tabs[index], self.profile),
+            (None, Some(app)) => (&app.tab, app.space),
+            (None, None) => return,
         };
-        let tab = &self.tabs[index];
-        if !tab.private && self.permissions.allowed(&self.profile, &site, &kinds) {
+        if !tab.private && self.permissions.allowed(&profile, &site, &kinds) {
             let _ = reply.try_send(true);
             return;
         }
         if self.discard_pending
-            || self.tool.is_some()
-            || index != self.active
+            || !(front || index.is_none())
             || kinds.iter().any(|kind| tab.declined.contains(kind))
         {
             return;
@@ -963,27 +1019,29 @@ impl Browser {
         let always = buttons.len();
         buttons.push(PromptButton::new("Allow"));
         self.discard_pending = true;
-        let answer = window.prompt(
+        let answer = self.prompt_in(
+            Some(id),
             PromptLevel::Info,
             &permissions::question(&site, &kinds),
             detail,
             &buttons,
+            window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            let answer = answer.await.ok();
+            let answer = answer.await;
             let _ = this.update_in(cx, |this, _, cx| {
                 this.discard_pending = false;
                 let allow = answer.is_some_and(|answer| answer > 0);
-                if !allow && let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == id) {
+                if !allow && let Some(tab) = this.tab_mut(id) {
                     tab.declined.extend(kinds.iter().copied());
                 }
                 if remember && answer == Some(always) {
-                    if let Err(error) = this.permissions.allow(&this.profile, &site, &kinds) {
+                    if let Err(error) = this.permissions.allow(&profile, &site, &kinds) {
                         this.notice = Some(error.to_string());
                     }
                     if kinds.contains(&permissions::Kind::Notifications) {
-                        engine::set_notification_site(this.profile, &site, true);
+                        engine::set_notification_site(profile, &site, true);
                     }
                 }
                 let _ = reply.try_send(allow);
@@ -1308,6 +1366,11 @@ impl Browser {
         menu = menu
             .menu_with_disabled("Copy Address", !addressed, item(CopyAddress))
             .menu("Duplicate Tab", item(Duplicate))
+            .menu_with_disabled(
+                "Open in App Window",
+                tab.private || !addressed,
+                item(PopOut),
+            )
             .separator();
         menu = if live {
             menu.menu("Suspend Tab", item(Suspend))
@@ -1372,6 +1435,7 @@ impl Browser {
             Resume => self.ensure_page(index, window, cx),
             ToggleAgent => self.toggle_agent_for(index, window, cx),
             Close => self.close(index, window, cx),
+            PopOut => self.pop_out(index, window, cx),
             MoveTo(space) => {
                 self.request_discard(lifecycle::Discard::MoveTab { id, space }, window, cx)
             }
@@ -1511,8 +1575,7 @@ impl Browser {
     /// real color. Stops early if the tab closes, suspends or navigates.
     fn sample_theme_after_load(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(revision) = self
-            .tabs
-            .iter()
+            .all_tabs()
             .find(|tab| tab.id == id)
             .map(|tab| tab.revision)
         else {
@@ -1527,7 +1590,7 @@ impl Browser {
                 elapsed = at;
                 let current = this
                     .update(cx, |this, _| {
-                        let tab = this.tabs.iter().find(|tab| tab.id == id)?;
+                        let tab = this.all_tabs().find(|tab| tab.id == id)?;
                         let page = tab.page.as_ref().filter(|_| tab.revision == revision)?;
                         page.sample_theme();
                         Some(())
@@ -1678,34 +1741,31 @@ impl Browser {
                     let _ = reply.try_send(true);
                     return;
                 }
-                if self.discard_pending
-                    || !self
-                        .tabs
-                        .iter()
-                        .any(|tab| tab.id == id && tab.page.is_some())
-                {
+                let shown = self.tabs.iter().chain(self.apps.iter().map(|app| &app.tab));
+                let Some(host) = shown
+                    .filter(|tab| tab.id == id && tab.page.is_some())
+                    .map(|tab| model::display_host(&tab.saved.url))
+                    .next()
+                    .filter(|_| !self.discard_pending)
+                else {
                     let _ = reply.try_send(false);
                     return;
-                }
+                };
                 self.discard_pending = true;
-                let host = self
-                    .tabs
-                    .iter()
-                    .find(|tab| tab.id == id)
-                    .map(|tab| model::display_host(&tab.saved.url))
-                    .unwrap_or_default();
                 let detail = format!(
                     "{host} has edits you haven’t saved, or you were working in content Browser can’t check. Leaving may discard them."
                 );
-                let answer = window.prompt(
+                let answer = self.prompt_in(
+                    Some(id),
                     PromptLevel::Warning,
                     "Leave this page?",
                     Some(&detail),
                     &["Cancel", "Leave page"],
+                    window,
                     cx,
                 );
                 cx.spawn_in(window, async move |this, cx| {
-                    let confirmed = answer.await == Ok(1);
+                    let confirmed = answer.await == Some(1);
                     let _ = this.update_in(cx, |this, window, cx| {
                         this.discard_pending = false;
                         this.sync_address(window, cx);
@@ -1725,7 +1785,8 @@ impl Browser {
             } => {
                 // Only the frontmost tab may ask, and never over another
                 // dialog. Dropping `reply` leaves the page free to ask again.
-                if self.discard_pending || self.tool.is_some() || self.tabs[self.active].id != id {
+                let front = self.tool.is_none() && self.tabs[self.active].id == id;
+                if self.discard_pending || !(front || self.app(id).is_some()) {
                     return;
                 }
                 let detail = format!("{site} wants to open a “{scheme}:” link in {app}.");
@@ -1840,6 +1901,9 @@ impl Browser {
                         tab.saved.url = url;
                         self.dirty = true;
                     }
+                    if !loading {
+                        self.sample_theme_after_load(id, cx);
+                    }
                 }
             }
             engine::Event::Opened {
@@ -1853,6 +1917,13 @@ impl Browser {
             engine::Event::NotificationClicked(identifier) => {
                 // The page hears the click either way; its tab comes forward.
                 let tab = engine::notification_clicked(&identifier);
+                if let Some(id) = tab
+                    && self.app(id).is_some()
+                {
+                    cx.activate(true);
+                    self.show_app(id, cx);
+                    return;
+                }
                 if let Some(id) = tab
                     && let Some(space) = self.space_of(id)
                 {
@@ -1872,7 +1943,14 @@ impl Browser {
                 reply,
             } => self.permission(id, site, kinds, reply, window, cx),
             engine::Event::NewTab(id, url) => {
-                if let Some(tab) = self.tabs.iter().find(|tab| tab.id == id) {
+                // From an app window: a tab in the browser window, its Space.
+                self.show_app_space(id, window, cx);
+                if let Some(tab) = self
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .or(self.app(id).map(|app| &app.tab))
+                {
                     let popup = self.ids.get();
                     self.new_tab(url, tab.private, window, cx);
                     if self.ids.get() > popup {
@@ -1881,7 +1959,13 @@ impl Browser {
                 }
             }
             engine::Event::OpenFiles(id, urls) => {
-                if let Some(tab) = self.tabs.iter().find(|tab| tab.id == id) {
+                self.show_app_space(id, window, cx);
+                if let Some(tab) = self
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .or(self.app(id).map(|app| &app.tab))
+                {
                     self.open_files(urls, tab.private, window, cx);
                 }
             }
@@ -2253,10 +2337,15 @@ impl Browser {
                         if edits { format!("{detail}\n\n{downloads}") } else { downloads }
                     }
                 };
-                Some(window.prompt(PromptLevel::Warning, title, Some(&detail), &["Cancel", confirm], cx))
+                // On the window that shows the page, when it's an app window.
+                let target = match &action {
+                    lifecycle::Discard::Close(id) | lifecycle::Discard::CloseApp(id) | lifecycle::Discard::Suspend(id) => Some(*id),
+                    _ => None,
+                };
+                Some(this.prompt_in(target, PromptLevel::Warning, title, Some(&detail), &["Cancel", confirm], window, cx))
             }).ok().flatten();
             let Some(answer) = answer else { return; };
-            let confirmed = answer.await == Ok(1);
+            let confirmed = answer.await == Some(1);
             let covered = if confirmed {
                 let current = Self::check_work(&pages, background).await;
                 states.iter().zip(&current).all(|((id, before), (current_id, after))| id == current_id && before.still_covered(after))
@@ -2322,6 +2411,10 @@ impl Browser {
                 self.delete_space_unchecked(*space, window, cx);
                 return;
             }
+            Discard::CloseApp(id) => {
+                self.close_app_unchecked(*id, cx);
+                return;
+            }
             _ => {}
         }
         if let Discard::CloseTabs { keep, ids } = &action {
@@ -2347,6 +2440,7 @@ impl Browser {
                 self.navigate_unchecked(START.into(), window, cx);
             }
             Discard::Quit
+            | Discard::CloseApp(_)
             | Discard::CloseTabs { .. }
             | Discard::MoveTab { .. }
             | Discard::DeleteSpace { .. } => unreachable!(),

@@ -683,6 +683,10 @@ pub struct Page {
     agent_trusted: Cell<bool>,
     #[cfg(target_os = "macos")]
     glow: std::cell::RefCell<Option<objc2::rc::Retained<glow::Glow>>>,
+    /// Shown in the browser's card (rounded) rather than filling an app
+    /// window; see `round_host`.
+    #[cfg(target_os = "macos")]
+    card: Cell<bool>,
 }
 
 impl Drop for Page {
@@ -960,6 +964,7 @@ impl Page {
             shared: Cell::new(None),
             agent_trusted: Cell::new(false),
             glow: std::cell::RefCell::new(None),
+            card: Cell::new(true),
         }))
     }
 
@@ -1334,6 +1339,45 @@ impl Page {
         if glow.isHidden() != host.0.isHidden() {
             glow.setHidden(host.0.isHidden());
         }
+    }
+
+    /// Moves the live page into `window`, where it's placed next; nothing
+    /// reloads. `card` says whether it sits in the browser's card or fills an
+    /// app window.
+    pub fn adopt(&self, window: &Window, card: bool) {
+        #[cfg(target_os = "macos")]
+        {
+            use wry::WebViewExtMacOS;
+            let Some(mtm) = objc2::MainThreadMarker::new() else {
+                return;
+            };
+            let Some(native) = native_window(window) else {
+                return;
+            };
+            let container = match content_container(&native, mtm) {
+                Ok(container) => container,
+                Err(error) => {
+                    log::error!("Moving a page: {error}");
+                    return;
+                }
+            };
+            self.card.set(card);
+            if let Some(host) = self.host.borrow().as_ref() {
+                host.0.removeFromSuperview();
+                container.addSubview(&host.0);
+                round_host(&host.0, card);
+            } else {
+                // Not shown yet: the first placement wraps it in a host here.
+                let web = self.raw.webview();
+                web.removeFromSuperview();
+                container.addSubview(&web);
+            }
+            // The next `place` positions it in its new window.
+            self.bounds.set(Bounds::default());
+            self.update_glow();
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (window, card);
     }
 
     pub fn contains(&self, point: Point<Pixels>) -> bool {
@@ -1783,6 +1827,36 @@ fn native_window(window: &Window) -> Option<objc2::rc::Retained<objc2_app_kit::N
     view.window()
 }
 
+/// Clips the page's host. In the browser window it's the card: rounded at
+/// the top and bottom-left, with the window's corner rounding the
+/// bottom-right. In an app window the window's own corners do it all.
+#[cfg(target_os = "macos")]
+fn round_host(host: &objc2_app_kit::NSView, card: bool) {
+    let layer: *mut objc2::runtime::AnyObject = unsafe { objc2::msg_send![host, layer] };
+    // SAFETY: the host is layer-backed (`setWantsLayer`) and lives on the
+    // UI thread; the layer outlives this call.
+    let Some(layer) = (unsafe { layer.as_ref() }) else {
+        return;
+    };
+    // MinY is the bottom in an unflipped layer.
+    const BOTTOM_LEFT: usize = 1; // kCALayerMinXMinYCorner
+    const TOP_LEFT: usize = 4; // kCALayerMinXMaxYCorner
+    const TOP_RIGHT: usize = 8; // kCALayerMaxXMaxYCorner
+    let (radius, corners) = if card {
+        (
+            f64::from(crate::ui::CARD_RADIUS - 1.),
+            BOTTOM_LEFT | TOP_LEFT | TOP_RIGHT,
+        )
+    } else {
+        (0., 0)
+    };
+    unsafe {
+        let _: () = objc2::msg_send![layer, setCornerRadius: radius];
+        let _: () = objc2::msg_send![layer, setMaskedCorners: corners];
+        let _: () = objc2::msg_send![layer, setMasksToBounds: true];
+    }
+}
+
 /// GPUI's accessibility provider owns its view's children. Put WKWebView beside
 /// that view in an ordinary AppKit container so VoiceOver sees both native trees.
 #[cfg(target_os = "macos")]
@@ -1811,22 +1885,7 @@ fn attach_accessible_native_view(page: &Page) -> anyhow::Result<()> {
             // Clip the page and any docked Inspector to the shell's panel,
             // just inside its 1 px edge; the window's corners clip the rest.
             host.setWantsLayer(true);
-            let layer: *mut objc2::runtime::AnyObject = objc2::msg_send![&host, layer];
-            if let Some(layer) = layer.as_ref() {
-                // The page card rounds its top corners and its bottom-left;
-                // the window's corner rounds the bottom-right (MinY is the
-                // bottom in an unflipped layer).
-                const BOTTOM_LEFT: usize = 1; // kCALayerMinXMinYCorner
-                const TOP_LEFT: usize = 4; // kCALayerMinXMaxYCorner
-                const TOP_RIGHT: usize = 8; // kCALayerMaxXMaxYCorner
-                let radius = f64::from(crate::ui::CARD_RADIUS - 1.);
-                let _: () = objc2::msg_send![layer, setCornerRadius: radius];
-                let _: () = objc2::msg_send![
-                    layer,
-                    setMaskedCorners: BOTTOM_LEFT | TOP_LEFT | TOP_RIGHT
-                ];
-                let _: () = objc2::msg_send![layer, setMasksToBounds: true];
-            }
+            round_host(&host, page.card.get());
             container.addSubview(&host);
             web.removeFromSuperview();
             host.addSubview(&web);

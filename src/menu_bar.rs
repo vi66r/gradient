@@ -9,9 +9,9 @@ use crate::agent::Access;
 use crate::{
     ActualSize, AddExtension, Back, Browser, ClearHistory, CloseTab, CopyUrl, DeleteSpace, Find,
     FindNext, FindPrevious, FocusAddress, Forward, Inspect, NewPrivateTab, NewSpace, NewTab,
-    NextSpace, NextTab, OpenFile, PreviousSpace, PreviousTab, Print, Quit, Reload, RenameSpace,
-    ReopenTab, RequestLab, ShowHistory, ShowSettings, SitePermissions, TabCommand, TabMenu,
-    ToggleAgent, ZoomIn, ZoomOut, model, spaces,
+    NextSpace, NextTab, OpenFile, PopIn, PopOut, PreviousSpace, PreviousTab, Print, Quit, Reload,
+    RenameSpace, ReopenTab, RequestLab, ShowHistory, ShowSettings, SitePermissions, TabCommand,
+    TabMenu, ToggleAgent, ZoomIn, ZoomOut, model, spaces,
 };
 use gpui::component::input;
 use gpui::{Action, Context, Menu, MenuItem, OsAction, SystemMenuType, Window, actions};
@@ -140,6 +140,8 @@ pub(crate) fn menus(state: &MenuState) -> Vec<Menu> {
         MenuItem::separator(),
         MenuItem::action("Copy Address", CopyUrl),
         MenuItem::action("Duplicate Tab", tab(TabCommand::Duplicate)),
+        MenuItem::action("Open in App Window", PopOut),
+        MenuItem::action("Move to Browser Window", PopIn),
         if state.live {
             MenuItem::action("Suspend Tab", tab(TabCommand::Suspend))
         } else {

@@ -57,7 +57,7 @@ pub(crate) fn palette(dark: bool) -> Palette {
     if dark { DARK } else { LIGHT }
 }
 
-const SIDEBAR: f32 = 248.;
+pub(crate) const SIDEBAR: f32 = 248.;
 /// Matches the native page host's corner radius in engine.rs.
 /// The page card sits below the toolbar and runs flush to the window's right
 /// and bottom edges. Its top corners and its sidebar-facing bottom corner are
@@ -812,6 +812,33 @@ impl Browser {
                         })),
                 )
             })
+            // Pops the page out into its own window; ✕'s neighbor, shown
+            // as ✕ is.
+            .when(!tab.private && tab.saved.url != START, |header| {
+                header.child(
+                    div()
+                        .id(("pop-out-tab", tab.id))
+                        .role(Role::Button)
+                        .aria_label(format!("Open {title} in an app window"))
+                        .size(px(22.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(R_CONTROL - 4.))
+                        .text_color(rgb(p.muted))
+                        .when(!selected, |d| {
+                            d.opacity(0.).group_hover(group.clone(), |s| s.opacity(1.))
+                        })
+                        .hover(|s| s.bg(rgb(p.hover)).text_color(rgb(p.ink)))
+                        .tooltip(placed(|| Tooltip::new("Open in App Window")))
+                        .child(Icon::default().path(crate::assets::POP_OUT).size_3())
+                        .on_click(cx.listener(move |this, _, w, cx| {
+                            cx.stop_propagation();
+                            this.pop_out(index, w, cx);
+                        })),
+                )
+            })
             .child(
                 div()
                     .id(("close-tab", tab.id))
@@ -1356,6 +1383,7 @@ impl Render for Browser {
                 this.request_discard(lifecycle::Discard::Quit, w, cx);
             }))
             .on_action(cx.listener(|this, _: &ClearHistory, w, cx| this.clear_history(w, cx)))
+            .on_action(cx.listener(|this, _: &PopOut, w, cx| this.pop_out(this.active, w, cx)))
             .on_action(cx.listener(|_, _: &menu_bar::About, _, _| crate::engine::show_about()))
             .on_action(cx.listener(|_, _: &menu_bar::Hide, _, cx| cx.hide()))
             .on_action(cx.listener(|_, _: &menu_bar::HideOthers, _, cx| cx.hide_other_apps()))
@@ -2356,6 +2384,20 @@ fn agent_color(p: Palette, dark: bool, trusted: bool) -> u32 {
         (true, false) => 0xd97706,
         (true, true) => 0xf59e0b,
     }
+}
+
+/// Relative luminance of a `0xRRGGBB` color, 0 (black) to 1 (white), for
+/// choosing ink that reads on it.
+pub(crate) fn luminance(color: u32) -> f32 {
+    let channel = |shift: u32| {
+        let value = ((color >> shift) & 0xff) as f32 / 255.;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
 }
 
 /// The color behind a page: its own tint, else the card's.

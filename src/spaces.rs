@@ -11,7 +11,7 @@
 use crate::model::{
     MAX_SPACES, SPACE_COLORS, SPACE_NAME_MAX, START, SavedSpace, SavedTab, Session,
 };
-use crate::{Browser, Tab, engine, lifecycle};
+use crate::{Browser, Tab, engine, lifecycle, model};
 use gpui::{Action, App, Context, Pixels, Point, PromptLevel, Window};
 use std::mem::take;
 
@@ -88,6 +88,8 @@ pub(crate) struct Restored {
     pub active: usize,
     pub parked: std::collections::HashMap<[u8; 16], Parked>,
     pub next_id: u64,
+    /// App windows to reopen, by Space.
+    pub apps: Vec<([u8; 16], crate::model::SavedApp)>,
 }
 
 pub(crate) fn restore_session(session: Session) -> Restored {
@@ -100,11 +102,15 @@ pub(crate) fn restore_session(session: Session) -> Restored {
         active: 0,
         parked: Default::default(),
         next_id: 0,
+        apps: Vec::new(),
     };
     for (index, saved) in session.spaces.into_iter().enumerate() {
         // `Session::validate` already checked every ID.
         let id = saved.profile().unwrap_or_else(new_id);
         let tabs = restore(saved.tabs, &mut next);
+        restored
+            .apps
+            .extend(saved.apps.into_iter().map(|app| (id, app)));
         let active = saved.active.min(tabs.len() - 1);
         restored.spaces.push(Space {
             id,
@@ -140,6 +146,7 @@ impl Browser {
         self.tabs
             .iter()
             .chain(self.parked.values().flat_map(|parked| parked.tabs.iter()))
+            .chain(self.apps.iter().map(|app| &app.tab))
     }
 
     /// A tab by ID in any Space; engine events arrive for parked pages too.
@@ -151,6 +158,7 @@ impl Browser {
                     .values_mut()
                     .flat_map(|parked| parked.tabs.iter_mut()),
             )
+            .chain(self.apps.iter_mut().map(|app| &mut app.tab))
             .find(|tab| tab.id == id)
     }
 
@@ -158,6 +166,9 @@ impl Browser {
     pub(crate) fn space_of(&self, id: u64) -> Option<usize> {
         if self.tabs.iter().any(|tab| tab.id == id) {
             return Some(self.space);
+        }
+        if let Some(app) = self.app(id) {
+            return self.spaces.iter().position(|space| space.id == app.space);
         }
         let (space, _) = self
             .parked
@@ -517,7 +528,7 @@ impl Browser {
         {
             return;
         }
-        let ids: Vec<u64> = if index == self.space {
+        let mut ids: Vec<u64> = if index == self.space {
             self.tabs.iter().map(|tab| tab.id).collect()
         } else {
             self.parked
@@ -525,6 +536,13 @@ impl Browser {
                 .map(|parked| parked.tabs.iter().map(|tab| tab.id).collect())
                 .unwrap_or_default()
         };
+        // Its app windows close with it.
+        ids.extend(
+            self.apps
+                .iter()
+                .filter(|app| app.space == id)
+                .map(|app| app.tab.id),
+        );
         let tabs = match ids.len() {
             0 | 1 => "Its tab closes".to_string(),
             count => format!("Its {count} tabs close"),
@@ -562,6 +580,7 @@ impl Browser {
         let Some(index) = self.spaces.iter().position(|space| space.id == id) else {
             return;
         };
+        self.close_space_apps(id, cx);
         if index == self.space {
             let neighbor = (0..self.spaces.len())
                 .filter(|&other| other != index && !self.spaces[other].private)
@@ -679,12 +698,22 @@ impl Browser {
             if anchor == Some(space.id) {
                 session.current = session.spaces.len();
             }
+            let apps = self
+                .apps
+                .iter()
+                .filter(|app| app.space == space.id && model::allowed_address(&app.tab.saved.url))
+                .map(|app| model::SavedApp {
+                    tab: app.tab.saved.clone(),
+                    frame: app.frame,
+                })
+                .collect();
             session.spaces.push(SavedSpace {
                 id: uuid::Uuid::from_bytes(space.id).to_string(),
                 name: space.name.clone(),
                 color: space.color,
                 active: active.min(saved.len() - 1),
                 tabs: saved,
+                apps,
             });
         }
         session

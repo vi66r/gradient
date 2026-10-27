@@ -32,6 +32,8 @@ impl WorkState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Discard {
     Close(u64),
+    /// Close an app window (`apps.rs`), named by its tab.
+    CloseApp(u64),
     /// Bulk close from a tab's menu. `keep` is the tab the menu belongs to; it
     /// becomes active if the active tab is among those closed.
     CloseTabs {
@@ -62,7 +64,10 @@ pub struct LivePage {
 impl Discard {
     pub fn includes(&self, id: u64) -> bool {
         match self {
-            Self::Close(target) | Self::Suspend(target) | Self::Start(target) => *target == id,
+            Self::Close(target)
+            | Self::CloseApp(target)
+            | Self::Suspend(target)
+            | Self::Start(target) => *target == id,
             Self::MoveTab { id: target, .. } => *target == id,
             Self::CloseTabs { ids, .. } | Self::DeleteSpace { ids, .. } => ids.contains(&id),
             Self::Quit => true,
@@ -80,6 +85,11 @@ impl Discard {
                 "Close this tab?",
                 "Close tab",
                 "This page has edits you haven’t saved. Closing discards them; reopening restores the address only, and private tabs can’t be reopened.",
+            ),
+            Self::CloseApp(_) => (
+                "Close this window?",
+                "Close window",
+                "This page has edits you haven’t saved. Closing discards them; reopening restores the address only.",
             ),
             Self::Suspend(_) => (
                 "Suspend this tab?",
