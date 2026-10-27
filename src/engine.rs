@@ -2110,7 +2110,6 @@ pub fn native_window_menu() {
     }
 }
 
-
 /// Gives GPUI's view the keyboard, for the shell's own text fields. Fields in
 /// the titlebar row (the address field) never get it from a click: AppKit
 /// only moves the keyboard to views that take clicks, and the titlebar does.
@@ -2120,6 +2119,60 @@ pub fn focus_shell(window: &Window) {
         && native.firstResponder().as_deref() != Some(&**view)
     {
         native.makeFirstResponder(Some(&view));
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
+/// Glides a window to `to` (GPUI screen points, top-left origin) over
+/// `seconds`, easing out, with AppKit animating the frame.
+pub fn animate_frame(window: &Window, to: Bounds<Pixels>, seconds: f64) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSAnimatablePropertyContainer, NSAnimationContext, NSScreen};
+        use objc2_foundation::{NSPoint, NSRect, NSSize};
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        let Some(native) = native_window(window) else {
+            return;
+        };
+        // GPUI measures from the top of the primary screen; AppKit from its
+        // bottom.
+        let Some(primary) = NSScreen::screens(mtm).firstObject() else {
+            return;
+        };
+        let height = primary.frame().size.height;
+        let frame = NSRect::new(
+            NSPoint::new(
+                f64::from(to.origin.x),
+                height - f64::from(to.origin.y) - f64::from(to.size.height),
+            ),
+            NSSize::new(f64::from(to.size.width), f64::from(to.size.height)),
+        );
+        let group = block2::RcBlock::new(move |context: std::ptr::NonNull<NSAnimationContext>| {
+            // SAFETY: AppKit passes the current context for this group.
+            let context = unsafe { context.as_ref() };
+            context.setDuration(seconds);
+            context.setTimingFunction(Some(
+                &objc2_quartz_core::CAMediaTimingFunction::functionWithControlPoints(
+                    0.22, 1., 0.36, 1.,
+                ),
+            ));
+            native.animator().setFrame_display(frame, true);
+        });
+        NSAnimationContext::runAnimationGroup(&group);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, to, seconds);
+}
+
+/// App windows open and close without AppKit's own animations: they glide
+/// out of and back onto the browser's card instead (`apps.rs`).
+pub fn without_window_animations(window: &Window) {
+    #[cfg(target_os = "macos")]
+    if let Some(native) = native_window(window) {
+        native.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
     }
     #[cfg(not(target_os = "macos"))]
     let _ = window;

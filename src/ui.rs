@@ -65,7 +65,7 @@ pub(crate) const SIDEBAR: f32 = 248.;
 pub(crate) const CARD_RADIUS: f32 = 20.;
 /// The titlebar row: the traffic lights over the sidebar, the toolbar over
 /// the page card. Window chrome, in the palette's colors whatever the page.
-const CONTROL_ZONE: f32 = 44.;
+pub(crate) const CONTROL_ZONE: f32 = 44.;
 /// Radius scale. Controls (address field, tab cells, rows) share one radius,
 /// standalone buttons a step smaller, and anything nested inside a control
 /// uses the control's radius minus its inset, so curves stay concentric.
@@ -510,6 +510,25 @@ impl Browser {
                 })
                 .child(mark)
                 .when(!dot_only, |chip| chip.child(label))
+                // A tab dropped here moves to this Space (and reloads there).
+                .when(!current && !space.private, |chip| {
+                    chip.drag_over::<DraggedTab>(move |style, _, _, _| {
+                        style.bg(rgba(wash)).text_color(rgb(p.ink))
+                    })
+                    .on_drop(cx.listener(
+                        move |this, dragged: &DraggedTab, window, cx| {
+                            this.dragging = None;
+                            this.request_discard(
+                                lifecycle::Discard::MoveTab {
+                                    id: dragged.id,
+                                    space: id,
+                                },
+                                window,
+                                cx,
+                            );
+                        },
+                    ))
+                })
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -861,6 +880,14 @@ impl Browser {
                         this.close(index, w, cx);
                     })),
             );
+        // Lifted out while it's dragged: its place in the list stays, faint.
+        let lifted = self.dragging == Some(tab.id) && cx.has_active_drag();
+        let preview = DraggedTab {
+            id: tab.id,
+            title: title.clone(),
+            ink: p.ink,
+            ground: p.selected,
+        };
         div()
             .id(("tab", tab.id))
             .group(group.clone())
@@ -877,7 +904,31 @@ impl Browser {
             .when(!selected, |d| d.hover(|s| s.bg(rgb(p.hover))))
             .child(header)
             .children(strip)
+            .when(lifted, |row| row.opacity(0.35))
             .on_click(cx.listener(move |this, _, w, cx| this.activate(index, w, cx)))
+            .on_drag(preview, |tab, offset, _, cx| {
+                cx.new(|_| TabPreview {
+                    tab: tab.clone(),
+                    offset,
+                })
+            })
+            // The list rearranges as the dragged tab passes over this one.
+            .on_drag_move(
+                cx.listener(move |this, event: &DragMoveEvent<DraggedTab>, _, cx| {
+                    let position = event.event.position;
+                    if !event.bounds.contains(&position) {
+                        return;
+                    }
+                    let dragged = event.drag(cx).id;
+                    this.dragging = Some(dragged);
+                    this.drag_tab_over(dragged, id, position.y >= event.bounds.center().y, cx);
+                }),
+            )
+            .on_drop(cx.listener(|this, _: &DraggedTab, _, cx| {
+                this.dragging = None;
+                this.save();
+                cx.notify();
+            }))
             // Acts on this tab without switching to it, as in Safari.
             .on_mouse_down(
                 MouseButton::Right,
@@ -2515,6 +2566,74 @@ fn label(text: &'static str, p: Palette) -> impl IntoElement {
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(p.muted))
         .child(text)
+}
+
+/// A tab being dragged in the sidebar.
+#[derive(Clone)]
+pub(crate) struct DraggedTab {
+    pub id: u64,
+    title: SharedString,
+    ink: u32,
+    ground: u32,
+}
+
+/// What follows the pointer while a tab is dragged: the tab, lifted.
+struct TabPreview {
+    tab: DraggedTab,
+    /// Where the tab was grabbed, so it stays under the pointer there.
+    offset: Point<Pixels>,
+}
+
+impl Render for TabPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .ml(-self.offset.x)
+            .mt(-self.offset.y)
+            .w(px(SIDEBAR - 16.))
+            .h(px(34.))
+            .px_3()
+            .flex()
+            .items_center()
+            .rounded(px(R_CONTROL))
+            .bg(rgb(self.tab.ground))
+            .shadow_lg()
+            .opacity(0.95)
+            .text_size(px(13.))
+            .text_color(rgb(self.tab.ink))
+            .font_family(if cfg!(target_os = "macos") {
+                ".AppleSystemUIFont"
+            } else {
+                "Inter"
+            })
+            .child(div().min_w_0().truncate().child(self.tab.title.clone()))
+    }
+}
+
+impl Browser {
+    /// The dragged tab takes `over`'s place once the pointer crosses that
+    /// tab's middle, so a small move doesn't make the two bounce.
+    fn drag_tab_over(&mut self, dragged: u64, over: u64, lower_half: bool, cx: &mut Context<Self>) {
+        if dragged == over {
+            return;
+        }
+        let position = |id| self.tabs.iter().position(|tab| tab.id == id);
+        let (Some(from), Some(to)) = (position(dragged), position(over)) else {
+            return;
+        };
+        if (from < to && !lower_half) || (from > to && lower_half) {
+            return;
+        }
+        let active = self.tabs[self.active].id;
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.active = self
+            .tabs
+            .iter()
+            .position(|tab| tab.id == active)
+            .unwrap_or(0);
+        self.dirty = true;
+        cx.notify();
+    }
 }
 
 /// Builds a tooltip that keeps clear of the page card. The page is a native

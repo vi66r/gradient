@@ -257,6 +257,8 @@ struct Browser {
     notice: Option<String>,
     copy_feedback: Option<CopyTarget>,
     copy_epoch: u64,
+    /// The tab being dragged to a new place in the list, while it is.
+    dragging: Option<u64>,
     /// Pages in their own windows; see `apps.rs`.
     apps: Vec<apps::AppPage>,
     /// What the menu bar shows now; see `menu_bar.rs`.
@@ -456,6 +458,7 @@ impl Browser {
             copy_epoch: 0,
             menus: None,
             apps: Vec::new(),
+            dragging: None,
             address_primed: false,
             address_press: None,
             discard_pending: false,
@@ -541,7 +544,7 @@ impl Browser {
                         cx.background_executor().timer(pause).await;
                         let _ = this.update_in(cx, |this, window, cx| {
                             if let Some(id) = this.apps.first().map(|app| app.tab.id) {
-                                this.pop_in(id, window, cx);
+                                this.return_app(id, window, cx);
                             }
                         });
                     }

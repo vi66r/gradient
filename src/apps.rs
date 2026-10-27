@@ -15,6 +15,26 @@ use gpui::component::Icon;
 
 /// The strip above the page: tall enough for the traffic lights.
 const STRIP: f32 = 28.;
+/// How long an app window takes to glide out of the card or back onto it.
+const GLIDE: f64 = 0.32;
+
+/// The browser window's card on screen, with room above it for an app
+/// window's strip: where an app window sits so its page lines up with the
+/// card's.
+fn card_frame(window: &Window) -> [f32; 4] {
+    let main = window.bounds();
+    let top = ui::CONTROL_ZONE - STRIP;
+    [
+        f32::from(main.origin.x) + ui::SIDEBAR,
+        f32::from(main.origin.y) + top,
+        f32::from(main.size.width) - ui::SIDEBAR,
+        f32::from(main.size.height) - top,
+    ]
+}
+
+fn bounds_of([x, y, width, height]: [f32; 4]) -> Bounds<Pixels> {
+    Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+}
 
 /// A page in its own window.
 pub(crate) struct AppPage {
@@ -25,6 +45,8 @@ pub(crate) struct AppPage {
     pub window: Option<WindowHandle<AppWindow>>,
     /// Where the window sits on screen, for the session.
     pub frame: Option<[f32; 4]>,
+    /// Gliding back onto the card, about to become a tab again.
+    pub returning: bool,
 }
 
 /// The app window's view: the strip, and the page placed below it.
@@ -59,15 +81,23 @@ impl Browser {
         if self.finding == Some(tab.id) {
             self.end_find();
         }
-        // Where the card is now, so the page doesn't jump: just below and
-        // right of it, the card's size.
-        let main = window.bounds();
-        let frame = [
-            f32::from(main.origin.x) + ui::SIDEBAR + 24.,
-            f32::from(main.origin.y) + 24.,
-            (f32::from(main.size.width) - ui::SIDEBAR).max(480.),
-            (f32::from(main.size.height) - STRIP).max(360.),
+        // The window opens right over the card, its strip just above, so
+        // the page doesn't move; then it glides out to a spot of its own,
+        // a little smaller.
+        let card = card_frame(window);
+        let [x, y, width, height] = card;
+        let (smaller_width, smaller_height) = ((width * 0.88).max(480.), (height * 0.88).max(360.));
+        let away = [
+            x + (width - smaller_width) / 2. + 24.,
+            y + (height - smaller_height) / 2. + 24.,
+            smaller_width,
+            smaller_height,
         ];
+        let (frame, glide) = if cx.reduce_motion() {
+            (away, None)
+        } else {
+            (card, Some(away))
+        };
         let tab = self.tabs.remove(index);
         if self.tabs.is_empty() {
             self.new_tab(START.into(), false, window, cx);
@@ -77,7 +107,7 @@ impl Browser {
             self.active -= 1;
         }
         let space = self.current_space().id;
-        self.open_app_window(tab, space, Some(frame), window, cx);
+        self.open_app_window(tab, space, Some(frame), glide, window, cx);
         self.save();
         cx.notify();
     }
@@ -89,6 +119,7 @@ impl Browser {
         tab: Tab,
         space: [u8; 16],
         frame: Option<[f32; 4]>,
+        glide: Option<[f32; 4]>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -99,6 +130,7 @@ impl Browser {
             space,
             window: None,
             frame,
+            returning: false,
         });
         let browser = cx.entity();
         let main = window.window_handle();
@@ -106,9 +138,7 @@ impl Browser {
         // the window opens after this update.
         cx.defer(move |cx| {
             let bounds = match frame {
-                Some([x, y, width, height]) => {
-                    Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
-                }
+                Some(frame) => bounds_of(frame),
                 None => Bounds::centered(None, size(px(1000.), px(760.)), cx),
             };
             let options = WindowOptions {
@@ -127,7 +157,7 @@ impl Browser {
             });
             let _ = main.update(cx, |_, window, cx| {
                 browser.update(cx, |this, cx| match opened {
-                    Ok(handle) => this.attach_app(id, handle, cx),
+                    Ok(handle) => this.attach_app(id, handle, glide, cx),
                     Err(error) => {
                         this.notice = Some(format!("Couldn’t open an app window: {error}"));
                         // The page goes back to the browser window.
@@ -143,7 +173,13 @@ impl Browser {
     }
 
     /// The app window opened: its page moves in, or starts there.
-    fn attach_app(&mut self, id: u64, handle: WindowHandle<AppWindow>, cx: &mut Context<Self>) {
+    fn attach_app(
+        &mut self,
+        id: u64,
+        handle: WindowHandle<AppWindow>,
+        glide: Option<[f32; 4]>,
+        cx: &mut Context<Self>,
+    ) {
         let events = self.events.clone();
         let (context, ids, zooms, dark) = (&mut self.context, &self.ids, &self.zooms, self.dark);
         let Some(app) = self.apps.iter_mut().find(|app| app.tab.id == id) else {
@@ -155,6 +191,10 @@ impl Browser {
         let _ = handle.update(cx, |_, app_window, cx| {
             #[cfg(target_os = "macos")]
             engine::install_backdrop(app_window);
+            engine::without_window_animations(app_window);
+            if let Some(to) = glide {
+                engine::animate_frame(app_window, bounds_of(to), GLIDE);
+            }
             if let Some(page) = &tab.page {
                 page.adopt(app_window, false);
                 return;
@@ -217,8 +257,38 @@ impl Browser {
         self.activate(0, window, cx);
     }
 
-    /// The strip's return button, or Tab ▸ Move to Browser Window: the live
-    /// page goes back into the browser window as the front tab of its Space.
+    /// The strip's return button, or Tab ▸ Move to Browser Window: the
+    /// window glides onto the browser's card, then its page becomes the
+    /// front tab there.
+    pub(crate) fn return_app(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(app) = self.apps.iter_mut().find(|app| app.tab.id == id) else {
+            return;
+        };
+        let Some(handle) = app.window.filter(|_| !app.returning) else {
+            return;
+        };
+        if cx.reduce_motion() {
+            self.pop_in(id, window, cx);
+            return;
+        }
+        app.returning = true;
+        let to = bounds_of(card_frame(window));
+        // The return button is in that window, which is busy with the click.
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, app_window, _| {
+                engine::animate_frame(app_window, to, GLIDE)
+            });
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_secs_f64(GLIDE))
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| this.pop_in(id, window, cx));
+        })
+        .detach();
+    }
+
+    /// Moves the page back into the browser window at once.
     pub(crate) fn pop_in(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(index) = self.apps.iter().position(|app| app.tab.id == id) else {
             return;
@@ -280,7 +350,7 @@ impl Browser {
             let id = engine::next_id(&self.ids);
             let mut tab = Tab::new(id, app.tab.url, false);
             tab.saved.title = app.tab.title;
-            self.open_app_window(tab, space, app.frame, window, cx);
+            self.open_app_window(tab, space, app.frame, None, window, cx);
         }
     }
 
@@ -519,7 +589,7 @@ impl Render for AppWindow {
                 button("Move to Browser Window", Icon::default().path(POP_IN)).on_click(
                     cx.listener(move |this, _, _, cx| {
                         this.browser(cx, move |browser, window, cx| {
-                            browser.pop_in(id, window, cx)
+                            browser.return_app(id, window, cx)
                         })
                     }),
                 ),
@@ -624,7 +694,7 @@ impl Render for AppWindow {
             }))
             .on_action(cx.listener(move |this, _: &PopIn, _, cx| {
                 this.browser(cx, move |browser, window, cx| {
-                    browser.pop_in(id, window, cx)
+                    browser.return_app(id, window, cx)
                 })
             }))
             .on_action(cx.listener(|this, _: &CopyUrl, _, cx| {
