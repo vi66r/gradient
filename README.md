@@ -58,7 +58,7 @@ Keep Browser running. Configure your MCP client to start this stdio command (rep
 {
   "mcpServers": {
     "browser": {
-      "command": "/Users/rafi/Developer/browser/dist/Browser.app/Contents/MacOS/browser",
+      "command": "/path/to/browser/dist/Browser.app/Contents/MacOS/browser",
       "args": ["mcp"]
     }
   }
