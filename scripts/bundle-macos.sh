@@ -2,6 +2,11 @@
 set -eu
 cd "$(dirname "$0")/.."
 profile=${1:-debug}
+case "${GRADIENT_ICON_APPEARANCE:-dark}" in
+  dark) bundle_icon=Gradient ;;
+  light) bundle_icon=Gradient-Light ;;
+  *) echo 'GRADIENT_ICON_APPEARANCE must be dark or light' >&2; exit 1 ;;
+esac
 case "$profile" in
   release)
     cargo build --release --locked
@@ -24,14 +29,18 @@ mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 cp "$binary" "$bundle/Contents/MacOS/gradient.new"
 mv "$bundle/Contents/MacOS/gradient.new" "$bundle/Contents/MacOS/gradient"
 
-iconset="$PWD/target/Gradient.iconset"
-rm -rf "$iconset"
-mkdir -p "$iconset"
-for size in 16 32 128 256 512; do
-  sips -z $size $size assets/icon.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
-  sips -z $((size * 2)) $((size * 2)) assets/icon.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+for variant in Gradient Gradient-Light; do
+  source=assets/icon.png
+  [ "$variant" != Gradient-Light ] || source=assets/icon-light.png
+  iconset="$PWD/target/$variant.iconset"
+  rm -rf "$iconset"
+  mkdir -p "$iconset"
+  for size in 16 32 128 256 512; do
+    sips -z $size $size "$source" --out "$iconset/icon_${size}x${size}.png" >/dev/null
+    sips -z $((size * 2)) $((size * 2)) "$source" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$iconset" -o "$bundle/Contents/Resources/$variant.icns"
 done
-iconutil -c icns "$iconset" -o "$bundle/Contents/Resources/Gradient.icns"
 
 cat > "$bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -41,7 +50,7 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
 <key>CFBundleIdentifier</key><string>com.misc.gradient</string>
 <key>CFBundleName</key><string>Gradient</string>
 <key>CFBundleDisplayName</key><string>Gradient</string>
-<key>CFBundleIconFile</key><string>Gradient</string>
+<key>CFBundleIconFile</key><string>$bundle_icon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$version</string>
 <key>CFBundleVersion</key><string>$version</string>

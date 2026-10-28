@@ -13,6 +13,8 @@ open dist/Gradient.app
 
 The repository pins Rust 1.96 and dependency versions through `Cargo.lock`. Use `scripts/bundle-macos.sh` for a faster debug build, or `scripts/bundle-macos.sh universal` for Apple silicon and Intel in one app (`rustup target add x86_64-apple-darwin` first). Bundles are ad-hoc signed unless `SIGNING_IDENTITY` names a Developer ID certificate.
 
+The app uses Gradient's leaf with an engraved starburst. `assets/icon.png` is the default dark icon; `assets/icon-light.png` is its light alternative. Both are bundled as multi-resolution macOS icons. Use `GRADIENT_ICON_APPEARANCE=light scripts/bundle-macos.sh release` to select the light icon for Finder and the Dock. Icon selection is a build setting; the browser interface still follows system appearance independently.
+
 To make a notarized release ZIP, sign Xcode in to an account on your Apple team, then run `SIGNING_IDENTITY="Apple Development: …" DEVELOPMENT_TEAM=<team ID> scripts/release-macos.sh`. It builds universal, has Xcode re-sign it with the team's Developer ID and notarize it, verifies the stapled app, and writes `dist/Gradient-<version>-mac.zip`.
 
 For an isolated development profile:
