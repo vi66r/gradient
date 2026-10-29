@@ -97,8 +97,13 @@ pub enum Event {
     },
     Title(u64, String),
     Loading(u64, bool, String),
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
-    NewTab(u64, String),
+    /// A link to open in a new tab: ⌘- or middle-click (`background`, unless
+    /// ⇧ is held), or a page opening a window where WebKit can't.
+    NewTab {
+        id: u64,
+        url: String,
+        background: bool,
+    },
     /// Local files dropped on a page, as file URLs, to open in new tabs.
     OpenFiles(u64, Vec<String>),
     Notice(String),
@@ -842,7 +847,11 @@ impl Page {
             )
             .with_new_window_req_handler(move |url, _| {
                 if crate::model::allowed_navigation(&url) && url != "about:blank" {
-                    let _ = popup_events.try_send(Event::NewTab(id, url));
+                    let _ = popup_events.try_send(Event::NewTab {
+                        id,
+                        url,
+                        background: false,
+                    });
                 }
                 wry::NewWindowResponse::Deny
             })

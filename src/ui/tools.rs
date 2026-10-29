@@ -239,9 +239,19 @@ impl Browser {
                         this.remove_history_page(&remove, cx);
                     })),
             )
-            .on_click(cx.listener(move |this, event: &ClickEvent, w, cx| {
-                let new_tab = event.modifiers().platform;
-                this.open_history_page(open.clone(), new_tab, w, cx)
+            .on_click(cx.listener({
+                let open = open.clone();
+                move |this, event: &ClickEvent, w, cx| {
+                    let new_tab = event.modifiers().platform;
+                    this.open_history_page(open.clone(), new_tab, w, cx)
+                }
+            }))
+            // Behind the current tab, as a middle-clicked link opens, so
+            // History stays up for the next one.
+            .on_aux_click(cx.listener(move |this, event: &ClickEvent, w, cx| {
+                if event.is_middle_click() {
+                    this.new_background_tab(open.clone(), false, w, cx);
+                }
             }))
             .into_any_element()
     }

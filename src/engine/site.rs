@@ -17,12 +17,16 @@ use objc2_web_kit::{
 };
 use std::rc::Rc;
 
+/// `WKNavigationAction.buttonNumber` for the middle button. WebKit reports
+/// a button mask (left 1, right 2, middle 4), not AppKit's button number.
+pub const MIDDLE_BUTTON: NSInteger = 1 << 2;
+
 /// A page WebKit wants opened from this one.
 pub struct Opening {
     pub url: String,
     /// A script's `window.open`, rather than a `target=_blank` link or form.
     pub popup: bool,
-    /// ⌘-click or middle-click: open behind the current tab.
+    /// ⌘-click or middle-click without ⇧: open behind the current tab.
     pub background: bool,
 }
 
@@ -100,7 +104,9 @@ define_class!(
             let kind = unsafe { action.navigationType() };
             let link = kind == WKNavigationType::LinkActivated;
             let modifiers = unsafe { action.modifierFlags() };
-            let background = link && (modifiers.contains(objc2_app_kit::NSEventModifierFlags::Command) || unsafe { action.buttonNumber() } == 2);
+            let background = link
+                && (modifiers.contains(objc2_app_kit::NSEventModifierFlags::Command) || unsafe { action.buttonNumber() } == MIDDLE_BUTTON)
+                && !modifiers.contains(objc2_app_kit::NSEventModifierFlags::Shift);
             let popup = kind == WKNavigationType::Other;
             if crate::model::allowed_navigation(&url) {
                 (self.ivars().policy.open)(configuration, Opening { url, popup, background })

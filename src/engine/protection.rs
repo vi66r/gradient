@@ -6,6 +6,7 @@ use objc2::{
     rc::Retained,
     runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject, Sel},
 };
+use objc2_app_kit::NSEventModifierFlags;
 use objc2_foundation::{NSError, NSHTTPURLResponse, NSString};
 use objc2_web_kit::{
     WKContentWorld, WKDownload, WKFrameInfo, WKNavigation, WKNavigationAction,
@@ -265,6 +266,22 @@ define_class!(
             if embedded && !download {
                 handler.call((WKNavigationActionPolicy::Allow,));
                 return;
+            }
+            // ⌘-click and middle-click open a link in a new tab, behind this
+            // one unless ⇧ is held, as in Safari. WebKit leaves that to the
+            // browser and would otherwise follow the link here. A link that
+            // already opens a window reaches the UI delegate instead.
+            if frame.is_some() && kind == WKNavigationType::LinkActivated && !download {
+                let modifiers = unsafe { action.modifierFlags() };
+                let middle = unsafe { action.buttonNumber() } == super::site::MIDDLE_BUTTON;
+                if (middle || modifiers.contains(NSEventModifierFlags::Command))
+                    && let Some(url) = target_url.clone().filter(|url| url != "about:blank" && crate::model::allowed_navigation(url))
+                {
+                    handler.call((WKNavigationActionPolicy::Cancel,));
+                    let background = !modifiers.contains(NSEventModifierFlags::Shift);
+                    let _ = state.events.try_send(Event::NewTab { id: state.id, url, background });
+                    return;
+                }
             }
             if !main || !browser || initial || frame_url.as_deref() == Some("about:blank") || same_document {
                 if file { state.file_gate.set(true); }

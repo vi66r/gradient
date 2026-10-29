@@ -800,6 +800,28 @@ impl Browser {
         }
     }
 
+    /// A tab opened behind the current one (a ⌘- or middle-clicked link, a
+    /// middle-clicked History row). It loads right away, in the current Space,
+    /// which already holds `private`.
+    fn new_background_tab(
+        &mut self,
+        url: String,
+        private: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.all_tabs().count() >= 1000 {
+            self.notice = Some("Tab limit reached.".into());
+            return;
+        }
+        let id = engine::next_id(&self.ids);
+        self.tabs.insert(0, Tab::new(id, url, private));
+        self.active += 1;
+        self.ensure_page(0, window, cx);
+        self.dirty = true;
+        cx.notify();
+    }
+
     /// Enter in the address field: an address, a search or an app link.
     fn enter_address(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
         match model::entry(value, self.settings.search) {
@@ -1947,8 +1969,13 @@ impl Browser {
                 kinds,
                 reply,
             } => self.permission(id, site, kinds, reply, window, cx),
-            engine::Event::NewTab(id, url) => {
-                // From an app window: a tab in the browser window, its Space.
+            engine::Event::NewTab {
+                id,
+                url,
+                background,
+            } => {
+                // A tab in the browser window, in its opener's Space (an app
+                // window opens there too).
                 self.show_app_space(id, window, cx);
                 if let Some(tab) = self
                     .tabs
@@ -1957,7 +1984,11 @@ impl Browser {
                     .or(self.app(id).map(|app| &app.tab))
                 {
                     let popup = self.ids.get();
-                    self.new_tab(url, tab.private, window, cx);
+                    if background {
+                        self.new_background_tab(url, tab.private, window, cx);
+                    } else {
+                        self.new_tab(url, tab.private, window, cx);
+                    }
                     if self.ids.get() > popup {
                         self.popups.insert(popup, id);
                     }

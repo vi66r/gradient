@@ -905,7 +905,12 @@ impl Browser {
             .when(!selected, |d| d.hover(|s| s.bg(rgb(p.hover))))
             .child(header)
             .children(strip)
-            .on_click(cx.listener(move |this, _, w, cx| this.activate(index, w, cx)));
+            .on_click(cx.listener(move |this, _, w, cx| this.activate(index, w, cx)))
+            .on_aux_click(cx.listener(move |this, event: &ClickEvent, w, cx| {
+                if event.is_middle_click() {
+                    this.close(index, w, cx);
+                }
+            }));
         self.reorderable(row, tab.id, title.clone(), p, cx)
             // Acts on this tab without switching to it, as in Safari.
             .on_mouse_down(
@@ -2935,7 +2940,12 @@ impl Browser {
                         this.close(index, w, cx);
                     })),
             )
-            .on_click(cx.listener(move |this, _, w, cx| this.activate(index, w, cx)));
+            .on_click(cx.listener(move |this, _, w, cx| this.activate(index, w, cx)))
+            .on_aux_click(cx.listener(move |this, event: &ClickEvent, w, cx| {
+                if event.is_middle_click() {
+                    this.close(index, w, cx);
+                }
+            }));
         self.reorderable(square, id, title, p, cx).on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
